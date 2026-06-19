@@ -72,7 +72,7 @@ if DARK:
 else:
     C = dict(bg="#F5F7FA", surface="#FFFFFF", border="#D7DEE8",
              text="#0B1320", muted="#5B6675", head="#0B1320", hover="#9AA7B8",
-             ibrd="#000000", itext="#000000")
+             ibrd="#B4BECC", itext="#000000")
     PROFIT, LOSS = "#1FA463", "#E5484D"
 ACCENT = "#F4631E"        # String Metaverse orange
 ACCENT_2 = "#FF8A3D"
