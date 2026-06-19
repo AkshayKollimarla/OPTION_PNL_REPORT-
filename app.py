@@ -67,12 +67,12 @@ DARK = st.session_state["dark_mode"]
 if DARK:
     C = dict(bg="#0B0F14", surface="#121824", border="#1E2A3A",
              text="#C9D1D9", muted="#8B98A5", head="#F4F7FB", hover="#2C3E54",
-             ibrd="#1E2A3A", itext="#C9D1D9")
+             ibrd="#1E2A3A", itext="#C9D1D9", ifill="#1A2230")
     PROFIT, LOSS = "#2ECC71", "#FF4D4F"
 else:
     C = dict(bg="#F5F7FA", surface="#FFFFFF", border="#D7DEE8",
              text="#0B1320", muted="#5B6675", head="#0B1320", hover="#9AA7B8",
-             ibrd="#B4BECC", itext="#000000")
+             ibrd="#B4BECC", itext="#000000", ifill="#EBEFF5")
     PROFIT, LOSS = "#1FA463", "#E5484D"
 ACCENT = "#F4631E"        # String Metaverse orange
 ACCENT_2 = "#FF8A3D"
@@ -83,7 +83,7 @@ st.markdown(
     f" --bg:{C['bg']}; --surface:{C['surface']}; --border:{C['border']};"
     f" --accent:{ACCENT}; --accent2:{ACCENT_2}; --profit:{PROFIT}; --loss:{LOSS};"
     f" --neutral:{C['text']}; --muted:{C['muted']}; --head:{C['head']}; --hover:{C['hover']};"
-    f" --ibrd:{C['ibrd']}; --itext:{C['itext']};"
+    f" --ibrd:{C['ibrd']}; --itext:{C['itext']}; --ifill:{C['ifill']};"
     " }</style>",
     unsafe_allow_html=True,
 )
@@ -105,17 +105,17 @@ st.markdown(
     .stApp, p, span, label, li { font-size: 13px; }
     [data-testid="stCaptionContainer"] { color: var(--muted) !important; font-size: 12px; }
 
-    /* Inputs — ONE clean border on the actual BaseWeb box of every widget */
+    /* Inputs — NO borders, soft filled boxes (Stripe/Notion style) */
     [data-testid="stTextInput"] div[data-baseweb="input"],
     [data-testid="stNumberInput"] div[data-baseweb="input"],
     [data-testid="stDateInput"] div[data-baseweb="input"],
     [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
-        background: var(--surface) !important;
-        border: 1px solid var(--ibrd) !important;
+        background: var(--ifill) !important;
+        border: none !important;
         border-radius: 8px !important;
         box-shadow: none !important;
     }
-    /* strip the inner base-input wrapper so we never double up */
+    /* strip the inner base-input wrapper so the fill is clean */
     [data-testid="stTextInput"] div[data-baseweb="base-input"],
     [data-testid="stNumberInput"] div[data-baseweb="base-input"],
     [data-testid="stDateInput"] div[data-baseweb="base-input"] {
@@ -130,12 +130,12 @@ st.markdown(
         font-family: 'JetBrains Mono', monospace !important; font-weight: 600 !important;
         -webkit-text-fill-color: var(--itext) !important;
     }
-    /* focus state -> accent border, never red */
+    /* focus -> subtle accent ring (no permanent border) */
     [data-testid="stTextInput"] div[data-baseweb="input"]:focus-within,
     [data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within,
     [data-testid="stDateInput"] div[data-baseweb="input"]:focus-within,
     [data-testid="stSelectbox"] div[data-baseweb="select"] > div:focus-within {
-        border-color: var(--accent) !important;
+        box-shadow: 0 0 0 2px var(--accent) inset !important;
     }
     .stTextInput label, .stNumberInput label, .stDateInput label, .stSelectbox label {
         color: var(--muted) !important; font-size: 11px !important; font-weight: 500 !important;
