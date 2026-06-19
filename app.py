@@ -18,27 +18,50 @@ import db
 from calculations import compute_derived, DERIVED_FIELDS, strike_number
 from config import DB_NAME, TABLE_NAME
 
-st.set_page_config(page_title="Options PnL Report", layout="wide")
+st.set_page_config(page_title="StringMetaverse Options Strategy Logs", layout="wide")
 
-# ---- Institutional dark theme (Bloomberg simplicity + fintech SaaS) ----
+# ---- Dark / Light toggle ----
+if "dark_mode" not in st.session_state:
+    st.session_state["dark_mode"] = True
+_sp, _tg = st.columns([6, 1])
+with _tg:
+    st.toggle("🌙 Dark mode", key="dark_mode")
+DARK = st.session_state["dark_mode"]
+
+# ---- Theme palette (String Metaverse orange accent) ----
+if DARK:
+    C = dict(bg="#0B0F14", surface="#121824", border="#1E2A3A",
+             text="#C9D1D9", muted="#8B98A5", head="#F4F7FB", hover="#2C3E54")
+    PROFIT, LOSS = "#2ECC71", "#FF4D4F"
+else:
+    C = dict(bg="#F5F7FA", surface="#FFFFFF", border="#E2E8F0",
+             text="#1A2230", muted="#5B6675", head="#0B1320", hover="#CBD5E1")
+    PROFIT, LOSS = "#1FA463", "#E5484D"
+ACCENT = "#F4631E"        # String Metaverse orange
+ACCENT_2 = "#FF8A3D"
+
+# ---- Theme-aware styling ----
+st.markdown(
+    "<style>:root {"
+    f" --bg:{C['bg']}; --surface:{C['surface']}; --border:{C['border']};"
+    f" --accent:{ACCENT}; --accent2:{ACCENT_2}; --profit:{PROFIT}; --loss:{LOSS};"
+    f" --neutral:{C['text']}; --muted:{C['muted']}; --head:{C['head']}; --hover:{C['hover']};"
+    " }</style>",
+    unsafe_allow_html=True,
+)
+
 st.markdown(
     """
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap');
-
-    :root {
-        --bg:#0B0F14; --surface:#121824; --border:#1E2A3A;
-        --accent:#4DA3FF; --profit:#2ECC71; --loss:#FF4D4F;
-        --neutral:#C9D1D9; --muted:#8B98A5;
-    }
 
     .stApp { background-color: var(--bg); color: var(--neutral); font-family: 'Inter', sans-serif; }
     [data-testid="stHeader"] { background: transparent; }
     .block-container { padding-top: 2.2rem; max-width: 1500px; }
 
     /* Typography hierarchy */
-    h1 { font-size: 24px !important; font-weight: 600 !important; color: #F4F7FB !important; letter-spacing:-0.01em; }
-    h2, h3 { font-size: 16px !important; font-weight: 600 !important; color: #F4F7FB !important; }
+    h1 { font-size: 24px !important; font-weight: 600 !important; color: var(--head) !important; letter-spacing:-0.01em; }
+    h2, h3 { font-size: 16px !important; font-weight: 600 !important; color: var(--head) !important; }
     h4, h5 { font-size: 14px !important; font-weight: 500 !important; color: var(--neutral) !important;
              text-transform: uppercase; letter-spacing: 0.06em; }
     .stApp, p, span, label, li { font-size: 13px; }
@@ -76,7 +99,7 @@ st.markdown(
     /* Native metrics (dashboard) */
     [data-testid="stMetric"] { background: var(--surface); border: 1px solid var(--border);
         border-radius: 10px; padding: 14px 16px; }
-    [data-testid="stMetricValue"] { font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #F4F7FB; }
+    [data-testid="stMetricValue"] { font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--head); }
     [data-testid="stMetricLabel"] { color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 
     /* Dataframe */
@@ -90,12 +113,31 @@ st.markdown(
         gap: 12px; margin: 6px 0 14px; }
     .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
         padding: 13px 16px; transition: border-color .15s ease; }
-    .stat-card:hover { border-color: #2C3E54; }
+    .stat-card:hover { border-color: var(--hover); }
     .stat-label { color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: 0.05em;
         text-transform: uppercase; margin-bottom: 7px; }
     .stat-value { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700; line-height: 1.1; }
     .group-head { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
         color: var(--muted); margin: 6px 0 2px; }
+
+    /* String Metaverse brand banner */
+    .brand-banner {
+        background: linear-gradient(120deg, #E8531B 0%, #F4631E 45%, #FF8A3D 100%);
+        border-radius: 14px; padding: 22px 28px; margin: 4px 0 18px;
+        display: flex; flex-direction: column; align-items: center; gap: 6px;
+        box-shadow: 0 6px 24px rgba(244, 99, 30, 0.25);
+    }
+    .brand-row { display: flex; align-items: center; gap: 12px; }
+    .brand-word { color: #fff; font-family: 'Inter', sans-serif; font-weight: 700;
+        letter-spacing: 0.22em; font-size: 14px; }
+    .brand-title {
+        font-family: Calibri, 'Segoe UI', 'Inter', sans-serif;
+        font-weight: 700; font-size: 30px; color: #ffffff; text-align: center;
+        letter-spacing: 0.5px; line-height: 1.15; margin: 2px 0;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.18);
+    }
+    .brand-sub { color: rgba(255,255,255,0.92); font-family: 'Inter', sans-serif;
+        font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -115,7 +157,7 @@ def stat_cards(items):
         elif kind == "accent":
             color = "var(--accent)"
         else:
-            color = "#F4F7FB"
+            color = "var(--head)"
         if isinstance(value, int):
             text = f"{value:,}"
         elif isinstance(value, float):
@@ -134,7 +176,32 @@ except Exception as e:  # noqa: BLE001
     st.error(f"Could not connect to MySQL. Check config.py / env vars.\n\n{e}")
     st.stop()
 
-st.title("📊 Options PnL Report")
+_LOGO = """
+<svg viewBox="0 0 100 100" width="40" height="40" xmlns="http://www.w3.org/2000/svg">
+  <g stroke="#ffffff" stroke-width="3" fill="#ffffff">
+    <line x1="50" y1="50" x2="86" y2="50"/><line x1="50" y1="50" x2="75.5" y2="75.5"/>
+    <line x1="50" y1="50" x2="50" y2="86"/><line x1="50" y1="50" x2="24.5" y2="75.5"/>
+    <line x1="50" y1="50" x2="14" y2="50"/><line x1="50" y1="50" x2="24.5" y2="24.5"/>
+    <line x1="50" y1="50" x2="50" y2="14"/><line x1="50" y1="50" x2="75.5" y2="24.5"/>
+    <circle cx="50" cy="50" r="6"/>
+    <circle cx="86" cy="50" r="4.5"/><circle cx="75.5" cy="75.5" r="4.5"/>
+    <circle cx="50" cy="86" r="4.5"/><circle cx="24.5" cy="75.5" r="4.5"/>
+    <circle cx="14" cy="50" r="4.5"/><circle cx="24.5" cy="24.5" r="4.5"/>
+    <circle cx="50" cy="14" r="4.5"/><circle cx="75.5" cy="24.5" r="4.5"/>
+  </g>
+</svg>
+"""
+
+st.markdown(
+    f"""
+    <div class="brand-banner">
+        <div class="brand-row">{_LOGO}<span class="brand-word">STRING METAVERSE</span></div>
+        <div class="brand-title">STRINGMETAVERSE OPTIONS STRATEGY LOGS</div>
+        <div class="brand-sub">A Web 3.0 Enterprise</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 st.caption(f"Database: `{DB_NAME}` · Table: `{TABLE_NAME}`")
 
 H = {
