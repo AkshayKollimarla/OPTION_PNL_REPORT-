@@ -128,18 +128,25 @@ st.markdown(
     /* hide the "Press Enter to apply" helper that caused a phantom box */
     [data-testid="InputInstructions"] { display: none !important; }
 
-    /* === ADD STRATEGY + UPDATE/CLOSE tabs: border outer container (bb6b60f look) === */
-    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stTextInput"] > div,
-    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stNumberInput"] > div,
-    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stDateInput"] > div,
-    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stSelectbox"] > div {
+    /* === ADD STRATEGY + UPDATE/CLOSE: boxed outer-container border (bb6b60f), phantom-safe === */
+    /* border only the FIRST child (the real input box) */
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stTextInput"] > div:first-of-type,
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stNumberInput"] > div:first-of-type,
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stDateInput"] > div:first-of-type,
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stSelectbox"] > div:first-of-type {
         background: var(--surface) !important;
         border: 1px solid var(--ibrd) !important;
         border-radius: 8px !important;
         box-shadow: none !important;
         min-height: 42px !important;
     }
-    /* remove the inner box border inside scope so it isn't doubled */
+    /* hide any extra direct-child helper div (this was the phantom empty box) */
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stTextInput"] > div:not(:first-of-type),
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stNumberInput"] > div:not(:first-of-type),
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stDateInput"] > div:not(:first-of-type) {
+        display: none !important;
+    }
+    /* strip the inner box border so it isn't doubled */
     [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stTextInput"] div[data-baseweb="input"],
     [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stNumberInput"] div[data-baseweb="input"],
     [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stDateInput"] div[data-baseweb="input"],
@@ -147,11 +154,11 @@ st.markdown(
         border: none !important;
         min-height: 0 !important;
     }
-    /* focus -> orange on the outer container in scope */
-    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stTextInput"] > div:focus-within,
-    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stNumberInput"] > div:focus-within,
-    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stDateInput"] > div:focus-within,
-    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stSelectbox"] > div:focus-within {
+    /* focus -> orange on the bordered outer container */
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stTextInput"] > div:first-of-type:focus-within,
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stNumberInput"] > div:first-of-type:focus-within,
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stDateInput"] > div:first-of-type:focus-within,
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stSelectbox"] > div:first-of-type:focus-within {
         border-color: var(--accent) !important;
     }
     /* inner text styling */
