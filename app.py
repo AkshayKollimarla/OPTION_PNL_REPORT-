@@ -158,10 +158,19 @@ st.markdown(
 
     /* Buttons */
     .stButton > button {
-        background: var(--accent); color: #08111C; border: none; border-radius: 8px;
+        background: var(--accent); color: #ffffff; border: none; border-radius: 8px;
         font-weight: 600; font-size: 13px; padding: 0.5rem 1.1rem;
     }
-    .stButton > button:hover { filter: brightness(1.08); color: #08111C; }
+    .stButton > button:hover { filter: brightness(1.08); color: #ffffff; }
+    .stDownloadButton > button {
+        background: var(--surface) !important; color: var(--neutral) !important;
+        border: 1px solid var(--border) !important; border-radius: 8px !important; font-weight: 600 !important;
+    }
+    .stDownloadButton > button:hover { border-color: var(--accent) !important; color: var(--accent) !important; }
+
+    /* Radio / checkbox labels visible in both themes */
+    [data-testid="stRadio"] label, [data-testid="stCheckbox"] label,
+    [data-testid="stRadio"] label p, [data-testid="stCheckbox"] label p { color: var(--neutral) !important; }
 
     /* Native metrics (dashboard) */
     [data-testid="stMetric"] { background: var(--surface); border: 1px solid var(--border);
@@ -169,8 +178,16 @@ st.markdown(
     [data-testid="stMetricValue"] { font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--head); }
     [data-testid="stMetricLabel"] { color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 
-    /* Dataframe */
-    [data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: 10px; }
+    /* Themed HTML table (replaces dark grid) */
+    .sm-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; margin: 4px 0 10px; }
+    .sm-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .sm-table thead th { background: var(--surface); color: var(--muted); text-transform: uppercase;
+        font-size: 10px; letter-spacing: 0.04em; padding: 9px 12px; text-align: left;
+        border-bottom: 1px solid var(--border); white-space: nowrap; position: sticky; top: 0; }
+    .sm-table tbody td { padding: 8px 12px; color: var(--neutral); border-bottom: 1px solid var(--border);
+        font-family: 'JetBrains Mono', monospace; white-space: nowrap; }
+    .sm-table tbody tr:nth-child(even) { background: var(--surface); }
+    .sm-table tbody tr:hover { background: var(--hover); }
 
     /* Info banner */
     [data-testid="stAlert"] { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
@@ -236,6 +253,13 @@ def stat_cards(items):
             f'<div class="stat-value" style="color:{color}">{text}</div></div>'
         )
     st.markdown(f'<div class="stat-grid">{"".join(cells)}</div>', unsafe_allow_html=True)
+
+
+def render_table(df):
+    """Render a DataFrame as a themed HTML table (matches light/dark mode)."""
+    html = df.to_html(index=False, border=0, classes="sm-table", escape=False)
+    st.markdown(f'<div class="sm-table-wrap">{html}</div>', unsafe_allow_html=True)
+
 
 try:
     db.init_db()
@@ -413,7 +437,7 @@ with tab_dash:
             total = pd.to_numeric(closed["net_booked_pnl"], errors="coerce").sum()
             m4.metric("Net booked PnL (closed)", f"{total:,.2f}")
 
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        render_table(df)
         st.download_button(
             "⬇️ Download CSV",
             df.to_csv(index=False).encode("utf-8"),
@@ -540,4 +564,6 @@ with tab_analysis:
         e3.metric("Booked − est. upside", f"{net - f(t['estimated_upside_net_pnl']):,.2f}")
 
         st.markdown("#### Full record")
-        st.dataframe(pd.DataFrame([t]).T.rename(columns={0: "value"}), use_container_width=True)
+        rec = pd.DataFrame([t]).T.rename(columns={0: "value"})
+        rec.insert(0, "field", rec.index)
+        render_table(rec)
