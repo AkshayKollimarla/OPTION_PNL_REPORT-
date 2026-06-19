@@ -67,20 +67,34 @@ st.markdown(
     .stApp, p, span, label, li { font-size: 13px; }
     [data-testid="stCaptionContainer"] { color: var(--muted) !important; font-size: 12px; }
 
-    /* Inputs */
+    /* Inputs — unify every box (text / number / date / select) to one look */
+    div[data-baseweb="input"],
+    div[data-baseweb="base-input"],
+    .stSelectbox div[data-baseweb="select"] > div,
+    .stDateInput div[data-baseweb="input"] {
+        background: var(--surface) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 8px !important;
+        box-shadow: none !important;
+    }
+    /* inner <input> sits inside the bordered container — no own border */
     .stTextInput input, .stNumberInput input, .stDateInput input {
-        background: var(--surface) !important; color: var(--neutral) !important;
-        border: 1px solid var(--border) !important; border-radius: 8px !important;
+        background: transparent !important; color: var(--neutral) !important;
+        border: none !important; box-shadow: none !important;
         font-family: 'JetBrains Mono', monospace !important; font-weight: 600 !important;
     }
-    .stSelectbox div[data-baseweb="select"] > div {
-        background: var(--surface) !important; border: 1px solid var(--border) !important; border-radius: 8px !important;
+    /* focus state -> accent border, never red */
+    div[data-baseweb="input"]:focus-within,
+    .stSelectbox div[data-baseweb="select"] > div:focus-within {
+        border-color: var(--accent) !important;
     }
     .stTextInput label, .stNumberInput label, .stDateInput label, .stSelectbox label {
         color: var(--muted) !important; font-size: 11px !important; font-weight: 500 !important;
         text-transform: uppercase; letter-spacing: 0.05em;
     }
-    .stNumberInput button { background: var(--surface) !important; border-color: var(--border) !important; color: var(--muted) !important; }
+    /* hide the +/- steppers on number inputs */
+    [data-testid="stNumberInputStepUp"],
+    [data-testid="stNumberInputStepDown"] { display: none !important; }
     input:disabled { -webkit-text-fill-color: var(--neutral) !important; color: var(--neutral) !important; opacity: 1 !important; }
 
     /* Tabs */
@@ -177,18 +191,24 @@ except Exception as e:  # noqa: BLE001
     st.stop()
 
 _LOGO = """
-<svg viewBox="0 0 100 100" width="40" height="40" xmlns="http://www.w3.org/2000/svg">
-  <g stroke="#ffffff" stroke-width="3" fill="#ffffff">
-    <line x1="50" y1="50" x2="86" y2="50"/><line x1="50" y1="50" x2="75.5" y2="75.5"/>
-    <line x1="50" y1="50" x2="50" y2="86"/><line x1="50" y1="50" x2="24.5" y2="75.5"/>
-    <line x1="50" y1="50" x2="14" y2="50"/><line x1="50" y1="50" x2="24.5" y2="24.5"/>
-    <line x1="50" y1="50" x2="50" y2="14"/><line x1="50" y1="50" x2="75.5" y2="24.5"/>
-    <circle cx="50" cy="50" r="6"/>
-    <circle cx="86" cy="50" r="4.5"/><circle cx="75.5" cy="75.5" r="4.5"/>
-    <circle cx="50" cy="86" r="4.5"/><circle cx="24.5" cy="75.5" r="4.5"/>
-    <circle cx="14" cy="50" r="4.5"/><circle cx="24.5" cy="24.5" r="4.5"/>
-    <circle cx="50" cy="14" r="4.5"/><circle cx="75.5" cy="24.5" r="4.5"/>
-  </g>
+<svg viewBox="0 0 100 100" width="44" height="44" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <g id="sm-arm">
+      <path d="M50,50 C 53,41 58,31 61,22" fill="none" stroke="#ffffff"
+            stroke-width="3.2" stroke-linecap="round"/>
+      <circle cx="62" cy="20" r="5.6" fill="#ffffff"/>
+      <circle cx="53" cy="41" r="2.6" fill="#ffffff"/>
+    </g>
+  </defs>
+  <use href="#sm-arm" transform="rotate(0 50 50)"/>
+  <use href="#sm-arm" transform="rotate(45 50 50)"/>
+  <use href="#sm-arm" transform="rotate(90 50 50)"/>
+  <use href="#sm-arm" transform="rotate(135 50 50)"/>
+  <use href="#sm-arm" transform="rotate(180 50 50)"/>
+  <use href="#sm-arm" transform="rotate(225 50 50)"/>
+  <use href="#sm-arm" transform="rotate(270 50 50)"/>
+  <use href="#sm-arm" transform="rotate(315 50 50)"/>
+  <circle cx="50" cy="50" r="3.4" fill="#ffffff"/>
 </svg>
 """
 
@@ -202,7 +222,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-st.caption(f"Database: `{DB_NAME}` · Table: `{TABLE_NAME}`")
 
 H = {
     "entry_date": "Date the strategy was entered/opened.",
