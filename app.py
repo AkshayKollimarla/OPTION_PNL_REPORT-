@@ -105,24 +105,20 @@ st.markdown(
     .stApp, p, span, label, li { font-size: 13px; }
     [data-testid="stCaptionContainer"] { color: var(--muted) !important; font-size: 12px; }
 
-    /* Inputs — ONE clean border on every widget's outer container */
-    [data-testid="stTextInput"] > div,
-    [data-testid="stNumberInput"] > div,
-    [data-testid="stDateInput"] > div,
-    [data-testid="stSelectbox"] > div {
+    /* Inputs — ONE clean border on the actual BaseWeb box of every widget */
+    [data-testid="stTextInput"] div[data-baseweb="input"],
+    [data-testid="stNumberInput"] div[data-baseweb="input"],
+    [data-testid="stDateInput"] div[data-baseweb="input"],
+    [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
         background: var(--surface) !important;
         border: 1px solid var(--ibrd) !important;
         border-radius: 8px !important;
         box-shadow: none !important;
     }
-    /* strip ALL inner baseweb borders/shadows so there's exactly one outline */
-    [data-testid="stTextInput"] div[data-baseweb="input"],
+    /* strip the inner base-input wrapper so we never double up */
     [data-testid="stTextInput"] div[data-baseweb="base-input"],
-    [data-testid="stNumberInput"] div[data-baseweb="input"],
     [data-testid="stNumberInput"] div[data-baseweb="base-input"],
-    [data-testid="stDateInput"] div[data-baseweb="input"],
-    [data-testid="stDateInput"] div[data-baseweb="base-input"],
-    [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+    [data-testid="stDateInput"] div[data-baseweb="base-input"] {
         background: transparent !important;
         border: none !important;
         box-shadow: none !important;
@@ -135,10 +131,10 @@ st.markdown(
         -webkit-text-fill-color: var(--itext) !important;
     }
     /* focus state -> accent border, never red */
-    [data-testid="stTextInput"] > div:focus-within,
-    [data-testid="stNumberInput"] > div:focus-within,
-    [data-testid="stDateInput"] > div:focus-within,
-    [data-testid="stSelectbox"] > div:focus-within {
+    [data-testid="stTextInput"] div[data-baseweb="input"]:focus-within,
+    [data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within,
+    [data-testid="stDateInput"] div[data-baseweb="input"]:focus-within,
+    [data-testid="stSelectbox"] div[data-baseweb="select"] > div:focus-within {
         border-color: var(--accent) !important;
     }
     .stTextInput label, .stNumberInput label, .stDateInput label, .stSelectbox label {
