@@ -77,6 +77,7 @@ def compute_derived(d: dict) -> dict:
     strike      = strike_number(d.get("options_strike"))
     investment  = _f(d.get("investment"))
     mm_pl       = _f(d.get("market_making_pl"))
+    opt_type    = str(d.get("option_type") or "PUT").upper()
 
     out = {}
 
@@ -100,12 +101,20 @@ def compute_derived(d: dict) -> dict:
     mm = (basket_loss * total_baskets) + (blbd + (blbd / 2) + (blbd / 2)) * (down_dist / 2)
     out["total_mm_loss"] = -mm
 
-    # 6) UPSIDE OPT PNL = (OPT EXIT - OPT ENTRY) * OPT ENTRY QTY
-    upside_opt = (opt_exit - opt_entry) * opt_qty
+    # 6) UPSIDE OPT PNL  &  7) DOWN OPT PNL  (depend on PUT vs CALL)
+    if opt_type == "CALL":
+        # CALL:
+        #   UPSIDE = ((FUT ENTRY + UP DIST) - (STRIKE# + OPT ENTRY)) * OPT QTY
+        #   DOWN   = (0 - OPT ENTRY) * OPT QTY
+        upside_opt = ((fut_entry + up_dist) - (strike + opt_entry)) * opt_qty
+        down_opt = (0 - opt_entry) * opt_qty
+    else:
+        # PUT (default):
+        #   UPSIDE = (OPT EXIT - OPT ENTRY) * OPT QTY
+        #   DOWN   = ((STRIKE# - OPT ENTRY) - (FUT ENTRY - DOWN DIST)) * OPT QTY
+        upside_opt = (opt_exit - opt_entry) * opt_qty
+        down_opt = ((strike - opt_entry) - (fut_entry - down_dist)) * opt_qty
     out["upside_opt_pnl"] = upside_opt
-
-    # 7) DOWN OPT PNL = ((STRIKE# - OPT ENTRY) - (FUT ENTRY - DOWN DIST)) * OPT QTY
-    down_opt = ((strike - opt_entry) - (fut_entry - down_dist)) * opt_qty
     out["down_opt_pnl"] = down_opt
 
     # 8) UPSIDE FUT PNL = FUT QTY * UPSIDE DISTANCE

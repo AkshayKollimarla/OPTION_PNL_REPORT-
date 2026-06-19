@@ -33,6 +33,7 @@ def main():
     manual = {
         "entry_date": ask("DATE (YYYY-MM-DD)", date, default=date.today()),
         "token": ask("TOKEN (e.g. HOOD)", str, required=True),
+        "option_type": (ask("OPTION TYPE (PUT/CALL)", str, default="PUT") or "PUT").upper(),
         "investment": ask("INVESTMENT", float),
         "options_strike": ask("OPTIONS STRIKE (e.g. 96 PUT)", str),
         "expiry": ask("EXPIRY (YYYY-MM-DD)", date),

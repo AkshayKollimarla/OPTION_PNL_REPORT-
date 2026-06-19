@@ -140,6 +140,7 @@ st.caption(f"Database: `{DB_NAME}` · Table: `{TABLE_NAME}`")
 H = {
     "entry_date": "Date the strategy was entered/opened.",
     "token": "Underlying token/symbol (e.g. HOOD, BTC, NIFTY).",
+    "option_type": "PUT or CALL — changes the UPSIDE OPT PNL & DOWN OPT PNL formulas.",
     "investment": "Total capital deployed in the strategy.",
     "options_strike": "Option strike traded — free text, e.g. '96 PUT'.",
     "expiry": "Option expiry date (you enter this).",
@@ -199,6 +200,7 @@ with tab_add:
     with c1:
         entry_date = st.date_input("DATE *", value=date.today(), help=help_("entry_date"))
         token = st.text_input("TOKEN *", placeholder="e.g. HOOD", help=help_("token"))
+        option_type = st.selectbox("OPTION TYPE *", ["PUT", "CALL"], help=help_("option_type"))
         investment = st.number_input("INVESTMENT", value=0.0, format="%.4f", help=help_("investment"))
         options_strike = st.text_input("OPTIONS STRIKE", placeholder="e.g. 96 PUT", help=help_("options_strike"))
         st.caption(f"Parsed strike number used in formulas: **{strike_number(options_strike)}**")
@@ -222,7 +224,8 @@ with tab_add:
 
     # assemble manual inputs and compute derived live
     manual = {
-        "entry_date": entry_date, "token": token, "investment": investment,
+        "entry_date": entry_date, "token": token, "option_type": option_type,
+        "investment": investment,
         "options_strike": options_strike, "expiry": expiry,
         "opt_entry_qty": opt_entry_qty, "opt_entry_price": opt_entry_price,
         "opt_exit_price": opt_exit_price, "fut_qty": fut_qty,
@@ -350,12 +353,16 @@ with tab_close:
             net_booked_pnl = st.number_input("NET BOOKED PNL", value=f(t["net_booked_pnl"]), format="%.4f", key="up_booked", help=help_("net_booked_pnl"))
             market_making_pl = st.number_input("MARKET MAKING PL", value=f(t["market_making_pl"]), format="%.4f", key="up_mmpl", help=help_("market_making_pl"))
         with u3:
+            option_type = st.selectbox("OPTION TYPE", ["PUT", "CALL"], key="up_opttype",
+                                       index=0 if str(t.get("option_type", "PUT")).upper() != "CALL" else 1,
+                                       help=help_("option_type"))
             end_date = st.date_input("END DATE", value=t["end_date"] or date.today(), key="up_enddate", help=help_("end_date"))
             status = st.selectbox("STATUS", ["open", "closed"], key="up_status",
                                   index=0 if t["status"] == "open" else 1, help=help_("status"))
 
         # merge existing row with edits, then recompute every derived field
         merged = {**t,
+                  "option_type": option_type,
                   "opt_exit_price": opt_exit_price, "fut_exit_price": fut_exit_price,
                   "net_booked_pnl": net_booked_pnl, "market_making_pl": market_making_pl,
                   "end_date": end_date, "status": status}
@@ -372,6 +379,7 @@ with tab_close:
 
         if st.button("💾 Save changes", type="primary"):
             update = {
+                "option_type": option_type,
                 "opt_exit_price": opt_exit_price, "fut_exit_price": fut_exit_price,
                 "net_booked_pnl": net_booked_pnl, "market_making_pl": market_making_pl,
                 "end_date": end_date, "status": status,

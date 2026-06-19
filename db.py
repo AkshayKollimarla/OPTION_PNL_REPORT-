@@ -15,6 +15,7 @@ from config import DB_CONFIG, DB_NAME, TABLE_NAME
 COLUMNS = [
     "entry_date",                  # DATE
     "token",                       # TOKEN
+    "option_type",                 # PUT / CALL
     "investment",                  # INVESTMENT
     "options_strike",             # OPTIONS STRIKE  (text, e.g. "96 PUT")
     "expiry",                      # EXPIRY
@@ -51,6 +52,7 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
     id                          INT AUTO_INCREMENT PRIMARY KEY,
     entry_date                  DATE            NOT NULL,
     token                       VARCHAR(40)     NOT NULL,
+    option_type                 VARCHAR(10)     NOT NULL DEFAULT 'PUT',
     investment                  DECIMAL(18,4),
     options_strike              VARCHAR(60),
     expiry                      DATE,
@@ -107,6 +109,17 @@ def init_db():
             raise
     conn.database = DB_NAME
     cur.execute(CREATE_TABLE_SQL)
+
+    # Auto-migrate: add option_type to tables created before this column existed.
+    try:
+        cur.execute(
+            f"ALTER TABLE {TABLE_NAME} ADD COLUMN option_type VARCHAR(10) "
+            "NOT NULL DEFAULT 'PUT' AFTER token"
+        )
+    except mysql.connector.Error as err:
+        if err.errno != errorcode.ER_DUP_FIELDNAME:  # 1060 = column already exists
+            raise
+
     conn.commit()
     cur.close()
     conn.close()
