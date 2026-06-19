@@ -72,7 +72,7 @@ if DARK:
 else:
     C = dict(bg="#F5F7FA", surface="#FFFFFF", border="#D7DEE8",
              text="#0B1320", muted="#5B6675", head="#0B1320", hover="#9AA7B8",
-             ibrd="#8C97A6", itext="#000000")
+             ibrd="#B4BECC", itext="#000000")
     PROFIT, LOSS = "#1FA463", "#E5484D"
 ACCENT = "#F4631E"        # String Metaverse orange
 ACCENT_2 = "#FF8A3D"
@@ -114,6 +114,7 @@ st.markdown(
         border: 1px solid var(--ibrd) !important;
         border-radius: 8px !important;
         box-shadow: none !important;
+        min-height: 42px !important;
     }
     /* strip nested wrapper borders so DATE isn't darker / doubled */
     [data-testid="stTextInput"] div[data-baseweb="base-input"],
