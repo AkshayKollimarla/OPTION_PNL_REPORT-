@@ -72,7 +72,7 @@ if DARK:
 else:
     C = dict(bg="#F5F7FA", surface="#FFFFFF", border="#D7DEE8",
              text="#0B1320", muted="#5B6675", head="#0B1320", hover="#9AA7B8",
-             ibrd="#B4BECC", itext="#000000")
+             ibrd="#D5DCE6", itext="#000000")
     PROFIT, LOSS = "#1FA463", "#E5484D"
 ACCENT = "#F4631E"        # String Metaverse orange
 ACCENT_2 = "#FF8A3D"
@@ -105,26 +105,30 @@ st.markdown(
     .stApp, p, span, label, li { font-size: 13px; }
     [data-testid="stCaptionContainer"] { color: var(--muted) !important; font-size: 12px; }
 
-    /* Inputs — every box identical to the DATE field */
-    [data-testid="stTextInput"] div[data-baseweb="input"],
-    [data-testid="stNumberInput"] div[data-baseweb="input"],
-    [data-testid="stDateInput"] div[data-baseweb="input"],
-    [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+    /* Inputs — ONE light border on the outer container of every widget */
+    [data-testid="stTextInput"] > div,
+    [data-testid="stNumberInput"] > div,
+    [data-testid="stDateInput"] > div,
+    [data-testid="stSelectbox"] > div {
         background: var(--surface) !important;
         border: 1px solid var(--ibrd) !important;
         border-radius: 8px !important;
         box-shadow: none !important;
         min-height: 42px !important;
     }
-    /* strip every inner wrapper border so the outer one is the only line */
-    [data-testid="stTextInput"] div[data-baseweb="base-input"],
-    [data-testid="stNumberInput"] div[data-baseweb="base-input"],
-    [data-testid="stDateInput"] div[data-baseweb="base-input"],
-    [data-testid="stSelectbox"] div[data-baseweb="select"] > div > div,
-    [data-testid="stSelectbox"] div[data-baseweb="select"] [data-baseweb="input"] {
+    /* strip ALL nested baseweb borders so only the outer line shows (no darker DATE) */
+    [data-testid="stTextInput"] > div div[data-baseweb="input"],
+    [data-testid="stTextInput"] > div div[data-baseweb="base-input"],
+    [data-testid="stNumberInput"] > div div[data-baseweb="input"],
+    [data-testid="stNumberInput"] > div div[data-baseweb="base-input"],
+    [data-testid="stDateInput"] > div div[data-baseweb="input"],
+    [data-testid="stDateInput"] > div div[data-baseweb="base-input"],
+    [data-testid="stSelectbox"] > div div[data-baseweb="select"],
+    [data-testid="stSelectbox"] > div div[data-baseweb="select"] > div {
         background: transparent !important;
         border: none !important;
         box-shadow: none !important;
+        min-height: 0 !important;
     }
     /* inner text styling */
     .stTextInput input, .stNumberInput input, .stDateInput input,
@@ -134,10 +138,10 @@ st.markdown(
         -webkit-text-fill-color: var(--itext) !important;
     }
     /* focus state -> accent border, never red */
-    [data-testid="stTextInput"] div[data-baseweb="input"]:focus-within,
-    [data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within,
-    [data-testid="stDateInput"] div[data-baseweb="input"]:focus-within,
-    [data-testid="stSelectbox"] div[data-baseweb="select"] > div:focus-within {
+    [data-testid="stTextInput"] > div:focus-within,
+    [data-testid="stNumberInput"] > div:focus-within,
+    [data-testid="stDateInput"] > div:focus-within,
+    [data-testid="stSelectbox"] > div:focus-within {
         border-color: var(--accent) !important;
     }
     .stTextInput label, .stNumberInput label, .stDateInput label, .stSelectbox label {
