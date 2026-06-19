@@ -105,7 +105,7 @@ st.markdown(
     .stApp, p, span, label, li { font-size: 13px; }
     [data-testid="stCaptionContainer"] { color: var(--muted) !important; font-size: 12px; }
 
-    /* Inputs — ONE clean border on the actual BaseWeb box of every widget */
+    /* Inputs — every box identical to the DATE field */
     [data-testid="stTextInput"] div[data-baseweb="input"],
     [data-testid="stNumberInput"] div[data-baseweb="input"],
     [data-testid="stDateInput"] div[data-baseweb="input"],
@@ -114,11 +114,14 @@ st.markdown(
         border: 1px solid var(--ibrd) !important;
         border-radius: 8px !important;
         box-shadow: none !important;
+        min-height: 42px !important;
     }
-    /* strip the inner base-input wrapper so we never double up */
+    /* strip every inner wrapper border so the outer one is the only line */
     [data-testid="stTextInput"] div[data-baseweb="base-input"],
     [data-testid="stNumberInput"] div[data-baseweb="base-input"],
-    [data-testid="stDateInput"] div[data-baseweb="base-input"] {
+    [data-testid="stDateInput"] div[data-baseweb="base-input"],
+    [data-testid="stSelectbox"] div[data-baseweb="select"] > div > div,
+    [data-testid="stSelectbox"] div[data-baseweb="select"] [data-baseweb="input"] {
         background: transparent !important;
         border: none !important;
         box-shadow: none !important;
