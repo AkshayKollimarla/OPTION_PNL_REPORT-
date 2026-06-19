@@ -20,25 +20,113 @@ from config import DB_NAME, TABLE_NAME
 
 st.set_page_config(page_title="Options PnL Report", layout="wide")
 
-# Make disabled (auto-calculated) fields show their value in dark, bold text
-# instead of the faint default grey.
+# ---- Institutional dark theme (Bloomberg simplicity + fintech SaaS) ----
 st.markdown(
     """
     <style>
-    input:disabled {
-        -webkit-text-fill-color: #0e1117 !important;
-        color: #0e1117 !important;
-        opacity: 1 !important;
-        font-weight: 700 !important;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap');
+
+    :root {
+        --bg:#0B0F14; --surface:#121824; --border:#1E2A3A;
+        --accent:#4DA3FF; --profit:#2ECC71; --loss:#FF4D4F;
+        --neutral:#C9D1D9; --muted:#8B98A5;
     }
-    div[data-testid="stNumberInput"] > div:has(input:disabled),
-    div[data-testid="stTextInput"] > div:has(input:disabled) {
-        opacity: 1 !important;
+
+    .stApp { background-color: var(--bg); color: var(--neutral); font-family: 'Inter', sans-serif; }
+    [data-testid="stHeader"] { background: transparent; }
+    .block-container { padding-top: 2.2rem; max-width: 1500px; }
+
+    /* Typography hierarchy */
+    h1 { font-size: 24px !important; font-weight: 600 !important; color: #F4F7FB !important; letter-spacing:-0.01em; }
+    h2, h3 { font-size: 16px !important; font-weight: 600 !important; color: #F4F7FB !important; }
+    h4, h5 { font-size: 14px !important; font-weight: 500 !important; color: var(--neutral) !important;
+             text-transform: uppercase; letter-spacing: 0.06em; }
+    .stApp, p, span, label, li { font-size: 13px; }
+    [data-testid="stCaptionContainer"] { color: var(--muted) !important; font-size: 12px; }
+
+    /* Inputs */
+    .stTextInput input, .stNumberInput input, .stDateInput input {
+        background: var(--surface) !important; color: var(--neutral) !important;
+        border: 1px solid var(--border) !important; border-radius: 8px !important;
+        font-family: 'JetBrains Mono', monospace !important; font-weight: 600 !important;
     }
+    .stSelectbox div[data-baseweb="select"] > div {
+        background: var(--surface) !important; border: 1px solid var(--border) !important; border-radius: 8px !important;
+    }
+    .stTextInput label, .stNumberInput label, .stDateInput label, .stSelectbox label {
+        color: var(--muted) !important; font-size: 11px !important; font-weight: 500 !important;
+        text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .stNumberInput button { background: var(--surface) !important; border-color: var(--border) !important; color: var(--muted) !important; }
+    input:disabled { -webkit-text-fill-color: var(--neutral) !important; color: var(--neutral) !important; opacity: 1 !important; }
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] { gap: 6px; border-bottom: 1px solid var(--border); }
+    .stTabs [data-baseweb="tab"] { color: var(--muted); font-weight: 500; font-size: 13px; }
+    .stTabs [aria-selected="true"] { color: var(--accent) !important; }
+    .stTabs [data-baseweb="tab-highlight"] { background-color: var(--accent); }
+
+    /* Buttons */
+    .stButton > button {
+        background: var(--accent); color: #08111C; border: none; border-radius: 8px;
+        font-weight: 600; font-size: 13px; padding: 0.5rem 1.1rem;
+    }
+    .stButton > button:hover { filter: brightness(1.08); color: #08111C; }
+
+    /* Native metrics (dashboard) */
+    [data-testid="stMetric"] { background: var(--surface); border: 1px solid var(--border);
+        border-radius: 10px; padding: 14px 16px; }
+    [data-testid="stMetricValue"] { font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #F4F7FB; }
+    [data-testid="stMetricLabel"] { color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+    /* Dataframe */
+    [data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: 10px; }
+
+    /* Info banner */
+    [data-testid="stAlert"] { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+
+    /* Custom stat cards (auto-calculated values) */
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 12px; margin: 6px 0 14px; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+        padding: 13px 16px; transition: border-color .15s ease; }
+    .stat-card:hover { border-color: #2C3E54; }
+    .stat-label { color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: 0.05em;
+        text-transform: uppercase; margin-bottom: 7px; }
+    .stat-value { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700; line-height: 1.1; }
+    .group-head { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+        color: var(--muted); margin: 6px 0 2px; }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+
+def stat_cards(items):
+    """Render a grid of premium stat cards.
+
+    items: list of (label, value, kind) where kind is
+      'neutral' (default text), 'pnl' (green/red by sign), or 'accent' (blue).
+    """
+    cells = []
+    for label, value, kind in items:
+        if kind == "pnl":
+            color = "var(--profit)" if (value or 0) >= 0 else "var(--loss)"
+        elif kind == "accent":
+            color = "var(--accent)"
+        else:
+            color = "#F4F7FB"
+        if isinstance(value, int):
+            text = f"{value:,}"
+        elif isinstance(value, float):
+            text = f"{value:,.2f}"
+        else:
+            text = str(value)
+        cells.append(
+            f'<div class="stat-card"><div class="stat-label">{label}</div>'
+            f'<div class="stat-value" style="color:{color}">{text}</div></div>'
+        )
+    st.markdown(f'<div class="stat-grid">{"".join(cells)}</div>', unsafe_allow_html=True)
 
 try:
     db.init_db()
@@ -146,30 +234,33 @@ with tab_add:
     }
     derived = compute_derived(manual)
 
-    st.markdown("##### 🔒 Auto-calculated (auto-filled)")
+    st.markdown("##### 🔒 Auto-calculated")
 
-    st.markdown("**General / Theta**")
-    g1, g2, g3, g4, g5 = st.columns(5)
-    g1.number_input("NO OF DAYS TO EXPIRY", value=int(derived["days_to_expiry"]), disabled=True, help=help_("days_to_expiry"))
-    g2.number_input("TOTAL THETA GAIN/LOSS", value=float(derived["total_theta_gain_loss"]), disabled=True, format="%.4f", help=help_("total_theta_gain_loss"))
-    g3.number_input("PER DAY THETA GAIN/LOSS", value=float(derived["per_day_theta_gain_loss"]), disabled=True, format="%.4f", help=help_("per_day_theta_gain_loss"))
-    g4.number_input("TOTAL BASKETS", value=float(derived["total_baskets"]), disabled=True, format="%.4f", help=help_("total_baskets"))
-    g5.number_input("TOTAL MM LOSS", value=float(derived["total_mm_loss"]), disabled=True, format="%.4f", help=help_("total_mm_loss"))
+    st.markdown('<div class="group-head">General / Theta</div>', unsafe_allow_html=True)
+    stat_cards([
+        ("NO OF DAYS TO EXPIRY", int(derived["days_to_expiry"]), "neutral"),
+        ("TOTAL THETA GAIN/LOSS", float(derived["total_theta_gain_loss"]), "pnl"),
+        ("PER DAY THETA GAIN/LOSS", float(derived["per_day_theta_gain_loss"]), "pnl"),
+        ("TOTAL BASKETS", float(derived["total_baskets"]), "neutral"),
+        ("TOTAL MM LOSS", float(derived["total_mm_loss"]), "pnl"),
+    ])
 
-    st.markdown("**📈 Upside**")
-    u1, u2, u3 = st.columns(3)
-    u1.number_input("UPSIDE OPT PNL", value=float(derived["upside_opt_pnl"]), disabled=True, format="%.4f", help=help_("upside_opt_pnl"))
-    u2.number_input("UPSIDE FUT PNL", value=float(derived["upside_fut_pnl"]), disabled=True, format="%.4f", help=help_("upside_fut_pnl"))
-    u3.number_input("EST UPSIDE NET PNL", value=float(derived["estimated_upside_net_pnl"]), disabled=True, format="%.4f", help=help_("estimated_upside_net_pnl"))
+    st.markdown('<div class="group-head">📈 Upside</div>', unsafe_allow_html=True)
+    stat_cards([
+        ("UPSIDE OPT PNL", float(derived["upside_opt_pnl"]), "pnl"),
+        ("UPSIDE FUT PNL", float(derived["upside_fut_pnl"]), "pnl"),
+        ("EST UPSIDE NET PNL", float(derived["estimated_upside_net_pnl"]), "pnl"),
+    ])
 
-    st.markdown("**📉 Downside**")
-    o1, o2, o3 = st.columns(3)
-    o1.number_input("DOWN OPT PNL", value=float(derived["down_opt_pnl"]), disabled=True, format="%.4f", help=help_("down_opt_pnl"))
-    o2.number_input("DOWNSIDE FUT PNL", value=float(derived["downside_fut_pnl"]), disabled=True, format="%.4f", help=help_("downside_fut_pnl"))
-    o3.number_input("EST DOWNSIDE NET PNL", value=float(derived["estimated_downside_net_pnl"]), disabled=True, format="%.4f", help=help_("estimated_downside_net_pnl"))
+    st.markdown('<div class="group-head">📉 Downside</div>', unsafe_allow_html=True)
+    stat_cards([
+        ("DOWN OPT PNL", float(derived["down_opt_pnl"]), "pnl"),
+        ("DOWNSIDE FUT PNL", float(derived["downside_fut_pnl"]), "pnl"),
+        ("EST DOWNSIDE NET PNL", float(derived["estimated_downside_net_pnl"]), "pnl"),
+    ])
 
-    st.markdown("**Return**")
-    st.number_input("APY", value=float(derived["apy"]), disabled=True, format="%.4f", help=help_("apy"))
+    st.markdown('<div class="group-head">Return</div>', unsafe_allow_html=True)
+    stat_cards([("APY", float(derived["apy"]), "accent")])
 
     if st.button("💾 Save strategy", type="primary"):
         if not token.strip():
@@ -248,16 +339,14 @@ with tab_close:
                   "end_date": end_date, "status": status}
         recomputed = compute_derived(merged)
 
-        st.markdown("##### 🔒 Recalculated (auto-filled)")
-        r1, r2, r3 = st.columns(3)
-        with r1:
-            st.number_input("UPSIDE OPT PNL ", value=float(recomputed["upside_opt_pnl"]), disabled=True, format="%.4f")
-            st.number_input("DOWN OPT PNL ", value=float(recomputed["down_opt_pnl"]), disabled=True, format="%.4f")
-        with r2:
-            st.number_input("EST UPSIDE NET PNL ", value=float(recomputed["estimated_upside_net_pnl"]), disabled=True, format="%.4f")
-            st.number_input("EST DOWNSIDE NET PNL ", value=float(recomputed["estimated_downside_net_pnl"]), disabled=True, format="%.4f")
-        with r3:
-            st.number_input("APY ", value=float(recomputed["apy"]), disabled=True, format="%.4f")
+        st.markdown("##### 🔒 Recalculated")
+        stat_cards([
+            ("UPSIDE OPT PNL", float(recomputed["upside_opt_pnl"]), "pnl"),
+            ("DOWN OPT PNL", float(recomputed["down_opt_pnl"]), "pnl"),
+            ("EST UPSIDE NET PNL", float(recomputed["estimated_upside_net_pnl"]), "pnl"),
+            ("EST DOWNSIDE NET PNL", float(recomputed["estimated_downside_net_pnl"]), "pnl"),
+            ("APY", float(recomputed["apy"]), "accent"),
+        ])
 
         if st.button("💾 Save changes", type="primary"):
             update = {
