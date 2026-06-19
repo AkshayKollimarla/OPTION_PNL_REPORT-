@@ -127,6 +127,33 @@ st.markdown(
     }
     /* hide the "Press Enter to apply" helper that caused a phantom box */
     [data-testid="InputInstructions"] { display: none !important; }
+
+    /* === ADD STRATEGY + UPDATE/CLOSE tabs: border outer container (bb6b60f look) === */
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stTextInput"] > div,
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stNumberInput"] > div,
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stDateInput"] > div,
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stSelectbox"] > div {
+        background: var(--surface) !important;
+        border: 1px solid var(--ibrd) !important;
+        border-radius: 8px !important;
+        box-shadow: none !important;
+        min-height: 42px !important;
+    }
+    /* remove the inner box border inside scope so it isn't doubled */
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stTextInput"] div[data-baseweb="input"],
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stNumberInput"] div[data-baseweb="input"],
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stDateInput"] div[data-baseweb="input"],
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+        border: none !important;
+        min-height: 0 !important;
+    }
+    /* focus -> orange on the outer container in scope */
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stTextInput"] > div:focus-within,
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stNumberInput"] > div:focus-within,
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stDateInput"] > div:focus-within,
+    [data-baseweb="tab-panel"]:has(.boxed-scope) [data-testid="stSelectbox"] > div:focus-within {
+        border-color: var(--accent) !important;
+    }
     /* inner text styling */
     .stTextInput input, .stNumberInput input, .stDateInput input,
     .stSelectbox div[data-baseweb="select"] span {
@@ -339,6 +366,7 @@ def fmt(v):
 # 1. ADD STRATEGY  (live auto-calc, no st.form)
 # --------------------------------------------------------------------------- #
 with tab_add:
+    st.markdown('<div class="boxed-scope"></div>', unsafe_allow_html=True)
     st.subheader("Enter a new strategy")
     st.caption("Hover the ❗ / ⓘ icon for each field's meaning. 🔒 = auto-calculated.")
 
@@ -476,6 +504,7 @@ with tab_dash:
 # 3. UPDATE / CLOSE  (recomputes derived fields after edit)
 # --------------------------------------------------------------------------- #
 with tab_close:
+    st.markdown('<div class="boxed-scope"></div>', unsafe_allow_html=True)
     st.subheader("Update exit prices / booked PnL and close")
     all_rows = db.fetch_trades(None)
     if not all_rows:
