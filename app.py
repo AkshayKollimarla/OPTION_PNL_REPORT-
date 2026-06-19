@@ -10,6 +10,8 @@ Tabs:
 Run with:  streamlit run app.py
 """
 from datetime import date
+import math
+import os
 
 import pandas as pd
 import streamlit as st
@@ -18,7 +20,40 @@ import db
 from calculations import compute_derived, DERIVED_FIELDS, strike_number
 from config import DB_NAME, TABLE_NAME
 
-st.set_page_config(page_title="StringMetaverse Options Strategy Logs", layout="wide")
+
+def _pinwheel(color="#ffffff", blades=8, swirl=38):
+    """Build the String Metaverse swirl/alloy-wheel logo as SVG inner shapes."""
+    cx = cy = 50
+    inner, outer = 14, 46
+    parts = []
+    for i in range(blades):
+        a0 = math.radians(i * 360 / blades)
+        pts = []
+        for s in range(13):
+            t = s / 12
+            r = inner + (outer - inner) * t
+            ang = a0 + math.radians(swirl) * t
+            pts.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
+        d = "M " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+        parts.append(f'<path d="{d}" fill="none" stroke="{color}" stroke-width="3.4" '
+                     'stroke-linecap="round" stroke-linejoin="round"/>')
+        ex, ey = pts[-1]
+        parts.append(f'<circle cx="{ex:.1f}" cy="{ey:.1f}" r="5.0" fill="{color}"/>')
+    parts.append(f'<circle cx="{cx}" cy="{cy}" r="3.2" fill="{color}"/>')
+    return "".join(parts)
+
+
+def logo_svg(color="#ffffff", size=44):
+    return (f'<svg viewBox="0 0 100 100" width="{size}" height="{size}" '
+            f'xmlns="http://www.w3.org/2000/svg">{_pinwheel(color)}</svg>')
+
+
+_FAVICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "favicon.png")
+st.set_page_config(
+    page_title="StringMetaverse Options Strategy Logs",
+    page_icon=_FAVICON if os.path.exists(_FAVICON) else "📊",
+    layout="wide",
+)
 
 # ---- Dark / Light toggle ----
 if "dark_mode" not in st.session_state:
@@ -31,11 +66,13 @@ DARK = st.session_state["dark_mode"]
 # ---- Theme palette (String Metaverse orange accent) ----
 if DARK:
     C = dict(bg="#0B0F14", surface="#121824", border="#1E2A3A",
-             text="#C9D1D9", muted="#8B98A5", head="#F4F7FB", hover="#2C3E54")
+             text="#C9D1D9", muted="#8B98A5", head="#F4F7FB", hover="#2C3E54",
+             ibrd="#1E2A3A", itext="#C9D1D9")
     PROFIT, LOSS = "#2ECC71", "#FF4D4F"
 else:
-    C = dict(bg="#F5F7FA", surface="#FFFFFF", border="#E2E8F0",
-             text="#1A2230", muted="#5B6675", head="#0B1320", hover="#CBD5E1")
+    C = dict(bg="#F5F7FA", surface="#FFFFFF", border="#D7DEE8",
+             text="#0B1320", muted="#5B6675", head="#0B1320", hover="#9AA7B8",
+             ibrd="#000000", itext="#000000")
     PROFIT, LOSS = "#1FA463", "#E5484D"
 ACCENT = "#F4631E"        # String Metaverse orange
 ACCENT_2 = "#FF8A3D"
@@ -46,6 +83,7 @@ st.markdown(
     f" --bg:{C['bg']}; --surface:{C['surface']}; --border:{C['border']};"
     f" --accent:{ACCENT}; --accent2:{ACCENT_2}; --profit:{PROFIT}; --loss:{LOSS};"
     f" --neutral:{C['text']}; --muted:{C['muted']}; --head:{C['head']}; --hover:{C['hover']};"
+    f" --ibrd:{C['ibrd']}; --itext:{C['itext']};"
     " }</style>",
     unsafe_allow_html=True,
 )
@@ -73,15 +111,17 @@ st.markdown(
     .stSelectbox div[data-baseweb="select"] > div,
     .stDateInput div[data-baseweb="input"] {
         background: var(--surface) !important;
-        border: 1px solid var(--border) !important;
+        border: 1px solid var(--ibrd) !important;
         border-radius: 8px !important;
         box-shadow: none !important;
     }
     /* inner <input> sits inside the bordered container — no own border */
-    .stTextInput input, .stNumberInput input, .stDateInput input {
-        background: transparent !important; color: var(--neutral) !important;
+    .stTextInput input, .stNumberInput input, .stDateInput input,
+    .stSelectbox div[data-baseweb="select"] span {
+        background: transparent !important; color: var(--itext) !important;
         border: none !important; box-shadow: none !important;
         font-family: 'JetBrains Mono', monospace !important; font-weight: 600 !important;
+        -webkit-text-fill-color: var(--itext) !important;
     }
     /* focus state -> accent border, never red */
     div[data-baseweb="input"]:focus-within,
@@ -190,32 +230,10 @@ except Exception as e:  # noqa: BLE001
     st.error(f"Could not connect to MySQL. Check config.py / env vars.\n\n{e}")
     st.stop()
 
-_LOGO = """
-<svg viewBox="0 0 100 100" width="44" height="44" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <g id="sm-arm">
-      <path d="M50,50 C 53,41 58,31 61,22" fill="none" stroke="#ffffff"
-            stroke-width="3.2" stroke-linecap="round"/>
-      <circle cx="62" cy="20" r="5.6" fill="#ffffff"/>
-      <circle cx="53" cy="41" r="2.6" fill="#ffffff"/>
-    </g>
-  </defs>
-  <use href="#sm-arm" transform="rotate(0 50 50)"/>
-  <use href="#sm-arm" transform="rotate(45 50 50)"/>
-  <use href="#sm-arm" transform="rotate(90 50 50)"/>
-  <use href="#sm-arm" transform="rotate(135 50 50)"/>
-  <use href="#sm-arm" transform="rotate(180 50 50)"/>
-  <use href="#sm-arm" transform="rotate(225 50 50)"/>
-  <use href="#sm-arm" transform="rotate(270 50 50)"/>
-  <use href="#sm-arm" transform="rotate(315 50 50)"/>
-  <circle cx="50" cy="50" r="3.4" fill="#ffffff"/>
-</svg>
-"""
-
 st.markdown(
     f"""
     <div class="brand-banner">
-        <div class="brand-row">{_LOGO}<span class="brand-word">STRING METAVERSE</span></div>
+        <div class="brand-row">{logo_svg("#ffffff", 44)}<span class="brand-word">STRING METAVERSE</span></div>
         <div class="brand-title">STRINGMETAVERSE OPTIONS STRATEGY LOGS</div>
         <div class="brand-sub">A Web 3.0 Enterprise</div>
     </div>
