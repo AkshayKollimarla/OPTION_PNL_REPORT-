@@ -300,6 +300,28 @@ with tab_dash:
             "options_pnl_report.csv", "text/csv",
         )
 
+        # ---- Delete a strategy ----
+        st.markdown("---")
+        st.markdown("##### 🗑️ Delete a strategy")
+        del_labels = {
+            r["id"]: f'#{r["id"]} · {r["token"]} · {r["options_strike"] or ""} '
+                     f'· {r["entry_date"]} · {r["status"]}'
+            for r in rows
+        }
+        dc1, dc2 = st.columns([3, 1])
+        with dc1:
+            del_id = st.selectbox(
+                "Select strategy to delete", list(del_labels),
+                format_func=lambda i: del_labels[i], key="del_select",
+            )
+        with dc2:
+            confirm_del = st.checkbox("Confirm", key="del_confirm",
+                                      help="Tick to enable the delete button.")
+        if st.button("Delete permanently", type="primary", disabled=not confirm_del):
+            db.delete_trade(del_id)
+            st.success(f"Deleted strategy #{del_id} ✓")
+            st.rerun()
+
 # --------------------------------------------------------------------------- #
 # 3. UPDATE / CLOSE  (recomputes derived fields after edit)
 # --------------------------------------------------------------------------- #
