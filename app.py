@@ -105,31 +105,27 @@ st.markdown(
     .stApp, p, span, label, li { font-size: 13px; }
     [data-testid="stCaptionContainer"] { color: var(--muted) !important; font-size: 12px; }
 
-    /* Inputs — ONE light border on the outer container of every widget */
-    [data-testid="stTextInput"] > div,
-    [data-testid="stNumberInput"] > div,
-    [data-testid="stDateInput"] > div,
-    [data-testid="stSelectbox"] > div {
+    /* Inputs — ONE light border on the single BaseWeb box of each widget */
+    [data-testid="stTextInput"] div[data-baseweb="input"],
+    [data-testid="stNumberInput"] div[data-baseweb="input"],
+    [data-testid="stDateInput"] div[data-baseweb="input"],
+    [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
         background: var(--surface) !important;
         border: 1px solid var(--ibrd) !important;
         border-radius: 8px !important;
         box-shadow: none !important;
-        min-height: 42px !important;
     }
-    /* strip ALL nested baseweb borders so only the outer line shows (no darker DATE) */
-    [data-testid="stTextInput"] > div div[data-baseweb="input"],
-    [data-testid="stTextInput"] > div div[data-baseweb="base-input"],
-    [data-testid="stNumberInput"] > div div[data-baseweb="input"],
-    [data-testid="stNumberInput"] > div div[data-baseweb="base-input"],
-    [data-testid="stDateInput"] > div div[data-baseweb="input"],
-    [data-testid="stDateInput"] > div div[data-baseweb="base-input"],
-    [data-testid="stSelectbox"] > div div[data-baseweb="select"],
-    [data-testid="stSelectbox"] > div div[data-baseweb="select"] > div {
+    /* strip nested wrapper borders so DATE isn't darker / doubled */
+    [data-testid="stTextInput"] div[data-baseweb="base-input"],
+    [data-testid="stNumberInput"] div[data-baseweb="base-input"],
+    [data-testid="stDateInput"] div[data-baseweb="base-input"],
+    [data-testid="stSelectbox"] div[data-baseweb="select"] > div > div {
         background: transparent !important;
         border: none !important;
         box-shadow: none !important;
-        min-height: 0 !important;
     }
+    /* hide the "Press Enter to apply" helper that caused a phantom box */
+    [data-testid="InputInstructions"] { display: none !important; }
     /* inner text styling */
     .stTextInput input, .stNumberInput input, .stDateInput input,
     .stSelectbox div[data-baseweb="select"] span {
@@ -138,10 +134,10 @@ st.markdown(
         -webkit-text-fill-color: var(--itext) !important;
     }
     /* focus state -> accent border, never red */
-    [data-testid="stTextInput"] > div:focus-within,
-    [data-testid="stNumberInput"] > div:focus-within,
-    [data-testid="stDateInput"] > div:focus-within,
-    [data-testid="stSelectbox"] > div:focus-within {
+    [data-testid="stTextInput"] div[data-baseweb="input"]:focus-within,
+    [data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within,
+    [data-testid="stDateInput"] div[data-baseweb="input"]:focus-within,
+    [data-testid="stSelectbox"] div[data-baseweb="select"] > div:focus-within {
         border-color: var(--accent) !important;
     }
     .stTextInput label, .stNumberInput label, .stDateInput label, .stSelectbox label {
