@@ -133,6 +133,12 @@ st.markdown(
         font-family: 'JetBrains Mono', monospace !important; font-weight: 600 !important;
         -webkit-text-fill-color: var(--itext) !important;
     }
+    /* selectbox selected value text visible (all child nodes) */
+    [data-testid="stSelectbox"] div[data-baseweb="select"],
+    [data-testid="stSelectbox"] div[data-baseweb="select"] div {
+        color: var(--itext) !important;
+        -webkit-text-fill-color: var(--itext) !important;
+    }
     /* focus state -> accent border, never red */
     [data-testid="stTextInput"] div[data-baseweb="input"]:focus-within,
     [data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within,
@@ -557,10 +563,9 @@ with tab_analysis:
         m4.metric("APY", f"{f(t['apy']):,.2f}%")
 
         st.markdown("#### Estimated vs booked")
-        e1, e2, e3 = st.columns(3)
+        e1, e2 = st.columns(2)
         e1.metric("Est. upside net PnL", f"{f(t['estimated_upside_net_pnl']):,.2f}")
         e2.metric("Est. downside net PnL", f"{f(t['estimated_downside_net_pnl']):,.2f}")
-        e3.metric("Booked − est. upside", f"{net - f(t['estimated_upside_net_pnl']):,.2f}")
 
         st.markdown("#### Full record")
         rec = pd.DataFrame([t]).T.rename(columns={0: "value"})
