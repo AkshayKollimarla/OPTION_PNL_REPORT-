@@ -2,11 +2,14 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { computeDerived } from "../../../lib/options-calculations";
+import { computeDerived, strikeNumber } from "../../../lib/options-calculations";
+import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
+
+const RISK_FREE = 0.05;
 
 const EMPTY = {
   entry_date:"", token:"", option_type:"PUT", investment:"", options_strike:"", expiry:"",
-  opt_entry_qty:"", opt_entry_price:"", opt_exit_price:"",
+  opt_entry_qty:"", opt_entry_price:"", opt_exit_price:"", iv:"",
   fut_qty:"", fut_entry_price:"", fut_exit_price:"",
   upside_distance:"", down_distance:"", basket_distance:"", basket_loss:"",
   net_booked_pnl:"", market_making_pl:"", end_date:"", status:"open",
@@ -59,6 +62,28 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
     finally { setSaving(false); }
   }
 
+  // Black-Scholes estimates (live, computed from current form)
+  const K_bs       = strikeNumber(form.options_strike);
+  const ep_bs      = parseFloat(form.opt_entry_price) || 0;
+  const qty_bs     = parseFloat(form.opt_entry_qty)   || 0;
+  const S_bs       = parseFloat(form.fut_entry_price) || K_bs || 0;
+  const sigma_bs   = Math.max(0.01, (parseFloat(form.iv) || 30) / 100);
+  const optType_bs = (form.option_type || "PUT").toUpperCase();
+  const today_d    = new Date(); today_d.setHours(0, 0, 0, 0);
+  const expiry_d   = form.expiry ? (() => { const d = new Date(form.expiry); d.setHours(0,0,0,0); return d; })() : null;
+  const dte_bs     = expiry_d ? Math.max(0, Math.round((expiry_d - today_d) / 86400000)) : 0;
+  const T_bs       = dte_bs / 365;
+  const S_up_bs    = S_bs + (parseFloat(form.upside_distance) || 0);
+  const S_dn_bs    = S_bs - (parseFloat(form.down_distance)   || 0);
+  const hasBS      = K_bs > 0 && qty_bs !== 0;
+  const bsUpsidePnl = hasBS ? expiryPnl(S_up_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
+  const bsDownPnl   = hasBS ? expiryPnl(S_dn_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
+  const bsTodayPnl  = hasBS && S_bs > 0
+    ? (T_bs > 0 ? currentPnl(S_bs, K_bs, T_bs, RISK_FREE, sigma_bs, optType_bs, ep_bs, qty_bs)
+                : expiryPnl(S_bs, K_bs, optType_bs, ep_bs, qty_bs))
+    : null;
+  const bsBreakeven = K_bs > 0 ? (optType_bs === "CALL" ? K_bs + ep_bs : K_bs - ep_bs) : null;
+
   return (
     <div>
       <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-6">
@@ -100,6 +125,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
             <Field label="Entry Qty"><input type="number" step="any" value={form.opt_entry_qty} onChange={(e) => set("opt_entry_qty", e.target.value)} className={inp} /></Field>
             <Field label="Entry Price"><input type="number" step="any" value={form.opt_entry_price} onChange={(e) => set("opt_entry_price", e.target.value)} className={inp} /></Field>
             <Field label="Exit Price"><input type="number" step="any" value={form.opt_exit_price} onChange={(e) => set("opt_exit_price", e.target.value)} className={inp} /></Field>
+            <Field label="Implied Volatility (%)"><input type="number" step="0.5" min="1" max="500" placeholder="e.g. 30" value={form.iv} onChange={(e) => set("iv", e.target.value)} className={inp} /></Field>
           </Section>
 
           <Section title="Futures Details">
@@ -170,6 +196,13 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
 
             <CalcGroup title="Return">
               <CalcRow label="APY" value={derived.apy != null ? `${Number(derived.apy).toFixed(2)}%` : "—"} signed big />
+            </CalcGroup>
+
+            <CalcGroup title="📊 BS Option PNL">
+              <CalcRow label={`Upside @ +${form.upside_distance || "…"} (Expiry)`} value={fmt(bsUpsidePnl)} signed />
+              <CalcRow label={`Downside @ -${form.down_distance  || "…"} (Expiry)`} value={fmt(bsDownPnl)}   signed />
+              <CalcRow label={`Today's PNL (IV ${form.iv || 30}%, ${dte_bs}d)`}     value={fmt(bsTodayPnl)}   signed big />
+              <CalcRow label="Breakeven Price" value={bsBreakeven != null ? bsBreakeven.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"} />
             </CalcGroup>
           </div>
         </div>

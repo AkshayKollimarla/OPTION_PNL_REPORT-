@@ -2,12 +2,15 @@
 
 import { useState, useEffect, useMemo, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { computeDerived } from "../../../lib/options-calculations";
+import { computeDerived, strikeNumber } from "../../../lib/options-calculations";
+import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
+
+const RISK_FREE = 0.05;
 
 const EMPTY = {
   entry_date: "", token: "", investment: "",
   options_strike: "", expiry: "",
-  opt_entry_qty: "", opt_entry_price: "", opt_exit_price: "",
+  opt_entry_qty: "", opt_entry_price: "", opt_exit_price: "", iv: "",
   fut_qty: "", fut_entry_price: "", fut_exit_price: "",
   upside_distance: "", down_distance: "", basket_distance: "", basket_loss: "",
   net_booked_pnl: "", market_making_pl: "", end_date: "", status: "open",
@@ -81,7 +84,7 @@ function tradeToForm(t) {
 
 const makeLeg = (type = "CALL LONG") => ({
   type,
-  form: { ...EMPTY, option_type: type.startsWith("CALL") ? "CALL" : "PUT" },
+  form: { ...EMPTY, option_type: type.startsWith("CALL") ? "CALL" : "PUT", iv: "" },
 });
 
 /* ── Main component ───────────────────────────────────── */
@@ -428,6 +431,7 @@ function LegCard({ label, legType, onLegTypeChange, form, set, derived, canRemov
           <F label="Fut Qty"><input type="number" step="any" value={form.fut_qty} onChange={(e) => set("fut_qty", e.target.value)} className={inp} /></F>
           <F label="Fut Entry Price"><input type="number" step="any" value={form.fut_entry_price} onChange={(e) => set("fut_entry_price", e.target.value)} className={inp} /></F>
           <F label="Fut Exit Price"><input type="number" step="any" value={form.fut_exit_price} onChange={(e) => set("fut_exit_price", e.target.value)} className={inp} /></F>
+          <F label="IV (%) for BS"><input type="number" step="0.5" min="1" max="500" placeholder="e.g. 30" value={form.iv} onChange={(e) => set("iv", e.target.value)} className={`${inp} border-indigo-200 bg-indigo-50`} /></F>
           <F label="Upside Distance"><input type="number" step="any" value={form.upside_distance} onChange={(e) => set("upside_distance", e.target.value)} className={inp} /></F>
           <F label="Down Distance"><input type="number" step="any" value={form.down_distance} onChange={(e) => set("down_distance", e.target.value)} className={inp} /></F>
           <F label="Basket Distance"><input type="number" step="any" value={form.basket_distance} onChange={(e) => set("basket_distance", e.target.value)} className={inp} /></F>
@@ -463,6 +467,7 @@ function LegCard({ label, legType, onLegTypeChange, form, set, derived, canRemov
           <CalcRow label="Est. Net (Down)"   value={fmt(derived.estimated_downside_net_pnl)} signed big />
           <div className="my-2 border-t border-slate-200" />
           <CalcRow label="APY"               value={derived.apy != null ? `${Number(derived.apy).toFixed(2)}%` : "—"} signed big />
+          <BsStrip form={form} legType={legType} />
         </div>
       </div>
     </div>
@@ -557,6 +562,46 @@ function PlusIcon() {
       <circle cx="12" cy="12" r="10"/>
       <path d="M12 8v8M8 12h8" strokeLinecap="round"/>
     </svg>
+  );
+}
+
+/* ── BS Strip (per-leg Black-Scholes PNL preview) ───── */
+
+function BsStrip({ form, legType }) {
+  const K_bs      = strikeNumber(form.options_strike);
+  const ep_bs     = parseFloat(form.opt_entry_price) || 0;
+  const qty_bs    = parseFloat(form.opt_entry_qty)   || 0;
+  const S_bs      = parseFloat(form.fut_entry_price) || K_bs || 0;
+  const sigma_bs  = Math.max(0.01, (parseFloat(form.iv) || 30) / 100);
+  const optType_bs = (form.option_type || (legType.startsWith("CALL") ? "CALL" : "PUT")).toUpperCase();
+  const today_d   = new Date(); today_d.setHours(0, 0, 0, 0);
+  const expiry_d  = form.expiry ? (() => { const d = new Date(form.expiry); d.setHours(0,0,0,0); return d; })() : null;
+  const dte_bs    = expiry_d ? Math.max(0, Math.round((expiry_d - today_d) / 86400000)) : 0;
+  const T_bs      = dte_bs / 365;
+  const S_up_bs   = S_bs + (parseFloat(form.upside_distance) || 0);
+  const S_dn_bs   = S_bs - (parseFloat(form.down_distance)   || 0);
+  const hasBS     = K_bs > 0 && qty_bs !== 0;
+
+  const bsUp   = hasBS ? expiryPnl(S_up_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
+  const bsDn   = hasBS ? expiryPnl(S_dn_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
+  const bsToday = hasBS && S_bs > 0
+    ? (T_bs > 0 ? currentPnl(S_bs, K_bs, T_bs, RISK_FREE, sigma_bs, optType_bs, ep_bs, qty_bs)
+                : expiryPnl(S_bs, K_bs, optType_bs, ep_bs, qty_bs))
+    : null;
+  const bsBE = K_bs > 0 ? (optType_bs === "CALL" ? K_bs + ep_bs : K_bs - ep_bs) : null;
+
+  return (
+    <>
+      <div className="my-2 border-t border-indigo-200" />
+      <p className="text-xs font-semibold uppercase tracking-wide text-indigo-400 mb-1">
+        📊 BS Option PNL (IV {form.iv || 30}%, {dte_bs}d)
+      </p>
+      <CalcRow label={`Upside @ +${form.upside_distance || "…"} (Expiry)`} value={fmt(bsUp)}    signed />
+      <CalcRow label={`Downside @ -${form.down_distance  || "…"} (Expiry)`} value={fmt(bsDn)}    signed />
+      <CalcRow label="Today's PNL (BS)"                                     value={fmt(bsToday)} signed big />
+      <CalcRow label="Breakeven"
+        value={bsBE != null ? bsBE.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"} />
+    </>
   );
 }
 

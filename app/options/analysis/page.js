@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
-import PayoffChart from "../../components/PayoffChart";
+import PayoffChart from "../../../components/PayoffChart";
 
 /* ── Formatters ─────────────────────────────────────────── */
 function pad(n) { return String(n).padStart(2, "0"); }
