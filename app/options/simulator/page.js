@@ -165,6 +165,34 @@ function SimulatorInner() {
     net: deriveds.reduce((s, d) => s + n(d.estimated_downside_net_pnl), 0),
   };
 
+  // BS Today PNL per leg at a target price
+  function legBsTodayPnl(form, optType, S_target) {
+    const K     = strikeNumber(form.options_strike);
+    const ep    = parseFloat(form.opt_entry_price) || 0;
+    const qty   = parseFloat(form.opt_entry_qty)   || 0;
+    if (!K || !qty) return 0;
+    const sigma  = Math.max(0.01, (parseFloat(form.iv) || 30) / 100);
+    const today  = new Date(); today.setHours(0, 0, 0, 0);
+    const expD   = form.expiry ? (() => { const d = new Date(form.expiry); d.setHours(0,0,0,0); return d; })() : null;
+    const dte    = expD ? Math.max(0, Math.round((expD - today) / 86400000)) : 0;
+    const T      = dte / 365;
+    return T > 0
+      ? currentPnl(S_target, K, T, RISK_FREE, sigma, optType, ep, qty)
+      : expiryPnl(S_target, K, optType, ep, qty);
+  }
+
+  const bsUpsideCombined = legs.reduce((s, l) => {
+    const S   = parseFloat(l.form.fut_entry_price) || 0;
+    const opt = (l.form.option_type || "PUT").toUpperCase();
+    return s + legBsTodayPnl(l.form, opt, S + (parseFloat(l.form.upside_distance) || 0));
+  }, 0);
+
+  const bsDownsideCombined = legs.reduce((s, l) => {
+    const S   = parseFloat(l.form.fut_entry_price) || 0;
+    const opt = (l.form.option_type || "PUT").toUpperCase();
+    return s + legBsTodayPnl(l.form, opt, S - (parseFloat(l.form.down_distance) || 0));
+  }, 0);
+
   /* ── Save handlers ──────────────────────────────────── */
   async function saveStrategies() {
     setSaving(true); setSaveMsg(null); setSaveErr(null);
@@ -289,8 +317,8 @@ function SimulatorInner() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            <ScenarioBlock title="📈 Upside Scenario" legs={legs} perLeg={upside.byLeg} totals={upside} scenario="up" />
-            <ScenarioBlock title="📉 Downside Scenario" legs={legs} perLeg={downside.byLeg} totals={downside} scenario="down" />
+            <ScenarioBlock title="📈 Upside Scenario" legs={legs} perLeg={upside.byLeg} totals={upside} scenario="up" bsToday={bsUpsideCombined} />
+            <ScenarioBlock title="📉 Downside Scenario" legs={legs} perLeg={downside.byLeg} totals={downside} scenario="down" bsToday={bsDownsideCombined} />
           </div>
 
           {/* Side-by-side breakdown table */}
@@ -451,7 +479,8 @@ function LegCard({ label, legType, onLegTypeChange, form, set, derived, canRemov
         <div className="rounded-lg bg-slate-50 border border-slate-100 p-4 space-y-1">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Auto-Calculated</p>
           <CalcRow label="Days to Expiry"    value={fmt(derived.days_to_expiry, "n")} />
-          <CalcRow label="Total Theta"       value={fmt(derived.total_theta_gain_loss)} />
+          <CalcRow label="Total Theta"       value={fmt(derived.total_theta_gain_loss)} signed />
+          <CalcRow label="Per Day Theta"     value={fmt(derived.per_day_theta_gain_loss)} signed />
           <CalcRow label="Total Baskets"     value={fmt(derived.total_baskets, "n")} />
           <CalcRow label="Total MM Loss"     value={fmt(derived.total_mm_loss)} neg />
           <div className="my-2 border-t border-slate-200" />
@@ -467,7 +496,7 @@ function LegCard({ label, legType, onLegTypeChange, form, set, derived, canRemov
           <CalcRow label="Est. Net (Down)"   value={fmt(derived.estimated_downside_net_pnl)} signed big />
           <div className="my-2 border-t border-slate-200" />
           <CalcRow label="APY"               value={derived.apy != null ? `${Number(derived.apy).toFixed(2)}%` : "—"} signed big />
-          <BsStrip form={form} legType={legType} />
+          <BsStrip form={form} legType={legType} derived={derived} />
         </div>
       </div>
     </div>
@@ -510,14 +539,14 @@ function SummaryCard({ label, value, color }) {
   );
 }
 
-function ScenarioBlock({ title, legs, perLeg, totals, scenario }) {
+function ScenarioBlock({ title, legs, perLeg, totals, scenario, bsToday }) {
   return (
     <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
       <p className="text-xs font-bold text-slate-700 mb-3">{title}</p>
       {legs.map((l, i) => (
         <div key={i} className="flex justify-between py-1.5 border-b border-dashed border-slate-200">
           <span className={`text-xs ${LEG_STYLES[l.type].txt} font-semibold`}>Opt PnL — Leg {i+1} ({l.type})</span>
-          <span className={`text-xs font-semibold ${(scenario === "up" ? perLeg[i]?.opt : perLeg[i]?.opt) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+          <span className={`text-xs font-semibold ${perLeg[i]?.opt >= 0 ? "text-emerald-600" : "text-red-600"}`}>
             {fmtCcy(perLeg[i]?.opt)}
           </span>
         </div>
@@ -530,9 +559,13 @@ function ScenarioBlock({ title, legs, perLeg, totals, scenario }) {
         <span className="text-xs text-slate-400">Total MM Loss</span>
         <span className={`text-xs font-semibold ${totals.mm >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmtCcy(totals.mm)}</span>
       </div>
-      <div className="flex justify-between pt-3 pb-1">
+      <div className="flex justify-between pt-3 pb-1 border-b border-slate-200">
         <span className="text-sm font-bold text-slate-700">Est. Net {scenario === "up" ? "Upside" : "Downside"}</span>
         <span className={`text-base font-extrabold ${totals.net >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmtCcy(totals.net)}</span>
+      </div>
+      <div className="flex justify-between pt-2 pb-1">
+        <span className="text-sm font-bold text-indigo-700">Today BS {scenario === "up" ? "Upside" : "Downside"}</span>
+        <span className={`text-base font-extrabold ${bsToday >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmtCcy(bsToday)}</span>
       </div>
     </div>
   );
@@ -567,7 +600,7 @@ function PlusIcon() {
 
 /* ── BS Strip (per-leg Black-Scholes PNL preview) ───── */
 
-function BsStrip({ form, legType }) {
+function BsStrip({ form, legType, derived }) {
   const K_bs      = strikeNumber(form.options_strike);
   const ep_bs     = parseFloat(form.opt_entry_price) || 0;
   const qty_bs    = parseFloat(form.opt_entry_qty)   || 0;
@@ -582,9 +615,17 @@ function BsStrip({ form, legType }) {
   const S_dn_bs   = S_bs - (parseFloat(form.down_distance)   || 0);
   const hasBS     = K_bs > 0 && qty_bs !== 0;
 
-  const bsUp   = hasBS ? expiryPnl(S_up_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
-  const bsDn   = hasBS ? expiryPnl(S_dn_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
-  const bsToday = hasBS && S_bs > 0
+  const bsUp        = hasBS ? expiryPnl(S_up_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
+  const bsDn        = hasBS ? expiryPnl(S_dn_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
+  const bsUpToday   = hasBS && S_up_bs > 0
+    ? (T_bs > 0 ? currentPnl(S_up_bs, K_bs, T_bs, RISK_FREE, sigma_bs, optType_bs, ep_bs, qty_bs)
+                : expiryPnl(S_up_bs, K_bs, optType_bs, ep_bs, qty_bs))
+    : null;
+  const bsDnToday   = hasBS && S_dn_bs > 0
+    ? (T_bs > 0 ? currentPnl(S_dn_bs, K_bs, T_bs, RISK_FREE, sigma_bs, optType_bs, ep_bs, qty_bs)
+                : expiryPnl(S_dn_bs, K_bs, optType_bs, ep_bs, qty_bs))
+    : null;
+  const bsToday     = hasBS && S_bs > 0
     ? (T_bs > 0 ? currentPnl(S_bs, K_bs, T_bs, RISK_FREE, sigma_bs, optType_bs, ep_bs, qty_bs)
                 : expiryPnl(S_bs, K_bs, optType_bs, ep_bs, qty_bs))
     : null;
@@ -596,12 +637,46 @@ function BsStrip({ form, legType }) {
       <p className="text-xs font-semibold uppercase tracking-wide text-indigo-400 mb-1">
         📊 BS Option PNL (IV {form.iv || 30}%, {dte_bs}d)
       </p>
-      <CalcRow label={`Upside @ +${form.upside_distance || "…"} (Expiry)`} value={fmt(bsUp)}    signed />
-      <CalcRow label={`Downside @ -${form.down_distance  || "…"} (Expiry)`} value={fmt(bsDn)}    signed />
-      <CalcRow label="Today's PNL (BS)"                                     value={fmt(bsToday)} signed big />
-      <CalcRow label="Breakeven"
-        value={bsBE != null ? bsBE.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"} />
+      {(() => {
+        const futUp = Number(derived?.upside_fut_pnl)   || 0;
+        const futDn = Number(derived?.downside_fut_pnl) || 0;
+        const netUpToday  = bsUpToday != null ? bsUpToday + futUp : null;
+        const netDnToday  = bsDnToday != null ? bsDnToday + futDn : null;
+        const netUpExpiry = bsUp      != null ? bsUp      + futUp : null;
+        const netDnExpiry = bsDn      != null ? bsDn      + futDn : null;
+        return (
+          <>
+            <CalcRow label="Upside Opt (Today BS)"       value={fmt(bsUpToday)}   signed />
+            <CalcRow label="Fut PnL (Upside)"            value={fmt(futUp)}       signed />
+            <CalcRow label="Net BS Upside (Today)"       value={fmt(netUpToday)}  signed big />
+            <CalcRow label="Downside Opt (Today BS)"     value={fmt(bsDnToday)}   signed />
+            <CalcRow label="Fut PnL (Downside)"          value={fmt(futDn)}       signed />
+            <CalcRow label="Net BS Downside (Today)"     value={fmt(netDnToday)}  signed big />
+            <CalcRow label="Upside Opt (Expiry)"         value={fmt(bsUp)}        signed />
+            <CalcRow label="Fut PnL (Upside)"            value={fmt(futUp)}       signed />
+            <CalcRow label="Est Net Upside (Expiry)"     value={fmt(netUpExpiry)} signed big />
+            <CalcRow label="Downside Opt (Expiry)"       value={fmt(bsDn)}        signed />
+            <CalcRow label="Fut PnL (Downside)"          value={fmt(futDn)}       signed />
+            <CalcRow label="Est Net Downside (Expiry)"   value={fmt(netDnExpiry)} signed big />
+            <CalcRow label="At Current Price (Today BS)" value={fmt(bsToday)}     signed big />
+            <CalcRow label="Breakeven"
+              value={bsBE != null ? bsBE.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"} />
+          </>
+        );
+      })()}
     </>
+  );
+}
+
+function BsSimRow({ label, value, signed }) {
+  const raw   = parseFloat(String(value ?? "").replace(/[^0-9.-]/g, ""));
+  const isNum = !isNaN(raw);
+  const color = signed && isNum ? (raw >= 0 ? "text-emerald-600" : "text-red-600") : "text-slate-700";
+  return (
+    <div className="py-1 border-b border-dashed border-slate-100">
+      <div className="text-xs text-slate-400">{label}</div>
+      <div className={`text-sm font-bold ${color}`}>{value ?? "—"}</div>
+    </div>
   );
 }
 

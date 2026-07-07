@@ -76,13 +76,27 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   const S_up_bs    = S_bs + (parseFloat(form.upside_distance) || 0);
   const S_dn_bs    = S_bs - (parseFloat(form.down_distance)   || 0);
   const hasBS      = K_bs > 0 && qty_bs !== 0;
-  const bsUpsidePnl = hasBS ? expiryPnl(S_up_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
-  const bsDownPnl   = hasBS ? expiryPnl(S_dn_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
-  const bsTodayPnl  = hasBS && S_bs > 0
+  const bsUpsidePnl      = hasBS ? expiryPnl(S_up_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
+  const bsDownPnl        = hasBS ? expiryPnl(S_dn_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
+  const bsUpsideTodayPnl = hasBS && S_up_bs > 0
+    ? (T_bs > 0 ? currentPnl(S_up_bs, K_bs, T_bs, RISK_FREE, sigma_bs, optType_bs, ep_bs, qty_bs)
+                : expiryPnl(S_up_bs, K_bs, optType_bs, ep_bs, qty_bs))
+    : null;
+  const bsDownTodayPnl   = hasBS && S_dn_bs > 0
+    ? (T_bs > 0 ? currentPnl(S_dn_bs, K_bs, T_bs, RISK_FREE, sigma_bs, optType_bs, ep_bs, qty_bs)
+                : expiryPnl(S_dn_bs, K_bs, optType_bs, ep_bs, qty_bs))
+    : null;
+  const bsTodayPnl       = hasBS && S_bs > 0
     ? (T_bs > 0 ? currentPnl(S_bs, K_bs, T_bs, RISK_FREE, sigma_bs, optType_bs, ep_bs, qty_bs)
                 : expiryPnl(S_bs, K_bs, optType_bs, ep_bs, qty_bs))
     : null;
   const bsBreakeven = K_bs > 0 ? (optType_bs === "CALL" ? K_bs + ep_bs : K_bs - ep_bs) : null;
+  const futUp_bs = Number(derived.upside_fut_pnl)   || 0;
+  const futDn_bs = Number(derived.downside_fut_pnl) || 0;
+  const bsNetUpsideToday   = bsUpsideTodayPnl != null ? bsUpsideTodayPnl + futUp_bs : null;
+  const bsNetDownToday     = bsDownTodayPnl   != null ? bsDownTodayPnl   + futDn_bs : null;
+  const bsNetUpsideExpiry  = bsUpsidePnl      != null ? bsUpsidePnl      + futUp_bs : null;
+  const bsNetDownExpiry    = bsDownPnl        != null ? bsDownPnl        + futDn_bs : null;
 
   return (
     <div>
@@ -172,7 +186,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
             <CalcGroup title="General / Theta">
               <CalcRow label="Days to Expiry"    value={fmt(derived.days_to_expiry, "number")} />
               <CalcRow label="Total Theta"        value={fmt(derived.total_theta_gain_loss)} />
-              <CalcRow label="Per Day Theta"      value={fmt(derived.per_day_theta_gain_loss)} />
+              <CalcRow label="Per Day Theta"      value={fmt(derived.per_day_theta_gain_loss)} signed />
               <CalcRow label="Total Baskets"      value={fmt(derived.total_baskets, "number")} />
               <CalcRow label="Total MM Loss"      value={fmt(derived.total_mm_loss)} loss />
             </CalcGroup>
@@ -199,9 +213,19 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
             </CalcGroup>
 
             <CalcGroup title="📊 BS Option PNL">
-              <CalcRow label={`Upside @ +${form.upside_distance || "…"} (Expiry)`} value={fmt(bsUpsidePnl)} signed />
-              <CalcRow label={`Downside @ -${form.down_distance  || "…"} (Expiry)`} value={fmt(bsDownPnl)}   signed />
-              <CalcRow label={`Today's PNL (IV ${form.iv || 30}%, ${dte_bs}d)`}     value={fmt(bsTodayPnl)}   signed big />
+              <CalcRow label={`Upside Opt (Today BS)`}       value={fmt(bsUpsideTodayPnl)} signed />
+              <CalcRow label="Fut PnL (Upside)"              value={fmt(futUp_bs)}          signed />
+              <CalcRow label="Net BS Upside (Today)"         value={fmt(bsNetUpsideToday)}  signed big />
+              <CalcRow label={`Downside Opt (Today BS)`}     value={fmt(bsDownTodayPnl)}    signed />
+              <CalcRow label="Fut PnL (Downside)"            value={fmt(futDn_bs)}          signed />
+              <CalcRow label="Net BS Downside (Today)"       value={fmt(bsNetDownToday)}    signed big />
+              <CalcRow label={`Upside Opt (Expiry)`}         value={fmt(bsUpsidePnl)}       signed />
+              <CalcRow label="Fut PnL (Upside)"              value={fmt(futUp_bs)}          signed />
+              <CalcRow label="Est Net Upside (Expiry)"       value={fmt(bsNetUpsideExpiry)} signed big />
+              <CalcRow label={`Downside Opt (Expiry)`}       value={fmt(bsDownPnl)}         signed />
+              <CalcRow label="Fut PnL (Downside)"            value={fmt(futDn_bs)}          signed />
+              <CalcRow label="Est Net Downside (Expiry)"     value={fmt(bsNetDownExpiry)}   signed big />
+              <CalcRow label={`At Current Price (Today BS, ${dte_bs}d)`} value={fmt(bsTodayPnl)} signed big />
               <CalcRow label="Breakeven Price" value={bsBreakeven != null ? bsBreakeven.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"} />
             </CalcGroup>
           </div>
@@ -254,6 +278,18 @@ function CalcRow({ label, value, signed, loss, big }) {
     <div className="flex items-center justify-between py-1 border-b border-dashed border-slate-100">
       <span className={big ? "text-sm font-bold text-slate-800" : "text-xs text-slate-500"}>{label}</span>
       <span className={`${big ? "text-base font-extrabold" : "text-xs font-semibold"} ${color}`}>{value ?? "—"}</span>
+    </div>
+  );
+}
+
+function BsRow({ label, value, signed }) {
+  const raw   = parseFloat(String(value ?? "").replace(/[^0-9.-]/g, ""));
+  const isNum = !isNaN(raw);
+  const color = signed && isNum ? (raw >= 0 ? "text-emerald-600" : "text-red-600") : "text-slate-700";
+  return (
+    <div className="py-1.5 border-b border-dashed border-slate-100">
+      <div className="text-xs text-slate-400">{label}</div>
+      <div className={`text-sm font-bold ${color}`}>{value ?? "—"}</div>
     </div>
   );
 }
