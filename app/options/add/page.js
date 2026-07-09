@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { computeDerived, strikeNumber } from "../../../lib/options-calculations";
 import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
+import LiveOptionPicker from "../../../components/LiveOptionPicker";
 
 const RISK_FREE = 0.05;
 
@@ -17,17 +18,71 @@ const EMPTY = {
 
 export default function AddStrategy({ initialData, tradeId, isEdit }) {
   const router  = useRouter();
-  const [form,    setForm]    = useState(initialData || EMPTY);
-  const [derived, setDerived] = useState({});
-  const [saving,  setSaving]  = useState(false);
-  const [error,   setError]   = useState(null);
-  const [success, setSuccess] = useState(null);
+  const [form,           setForm]           = useState(initialData || EMPTY);
+  const [derived,        setDerived]        = useState({});
+  const [saving,         setSaving]         = useState(false);
+  const [error,          setError]          = useState(null);
+  const [success,        setSuccess]        = useState(null);
+  const [accounts,       setAccounts]       = useState([]);
+  const [selectedAcct,   setSelectedAcct]   = useState("");
+  const [executing,      setExecuting]      = useState(false);
+  const [executeResult,  setExecuteResult]  = useState(null);
+  const [executeError,   setExecuteError]   = useState(null);
+  const instrumentRef = useRef({ option: "", future: "" });
 
   useEffect(() => {
     setDerived(computeDerived(form));
   }, [form]);
 
+  useEffect(() => {
+    fetch("/api/accounts")
+      .then(r => r.json())
+      .then(d => setAccounts(d.accounts || []))
+      .catch(() => {});
+  }, []);
+
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+
+  function handleLiveFill({ expiry, strike, option_type, opt_entry_price, iv, fut_entry_price, instrument_name, future_instrument }) {
+    setForm(f => ({
+      ...f,
+      options_strike:  strike,
+      expiry:          expiry,
+      option_type:     option_type,
+      opt_entry_price: opt_entry_price,
+      iv:              iv,
+      fut_entry_price: fut_entry_price,
+    }));
+    instrumentRef.current = { option: instrument_name, future: future_instrument };
+  }
+
+  async function handleExecute() {
+    setExecuteError(null); setExecuteResult(null);
+    if (!selectedAcct) { setExecuteError("Select an account first."); return; }
+    const optQty = parseFloat(form.opt_entry_qty) || 0;
+    const futQty = parseFloat(form.fut_qty) || 0;
+    if (optQty === 0 && futQty === 0) { setExecuteError("Enter option qty and/or futures qty."); return; }
+
+    const optInst = instrumentRef.current.option;
+    const futInst = instrumentRef.current.future || `${(form.token || "ETH").toUpperCase()}-PERPETUAL`;
+    if (optQty !== 0 && !optInst) { setExecuteError("Use Live Market Data to select the instrument first (sets option instrument name)."); return; }
+
+    setExecuting(true);
+    try {
+      const res  = await fetch("/api/execute", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ account_id: selectedAcct, option_instrument: optQty !== 0 ? optInst : null, option_qty: optQty, future_instrument: futQty !== 0 ? futInst : null, future_qty: futQty }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Execute failed");
+      setExecuteResult(data.results);
+    } catch (e) {
+      setExecuteError(e.message);
+    } finally {
+      setExecuting(false);
+    }
+  }
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -91,12 +146,13 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
                 : expiryPnl(S_bs, K_bs, optType_bs, ep_bs, qty_bs))
     : null;
   const bsBreakeven = K_bs > 0 ? (optType_bs === "CALL" ? K_bs + ep_bs : K_bs - ep_bs) : null;
-  const futUp_bs = Number(derived.upside_fut_pnl)   || 0;
-  const futDn_bs = Number(derived.downside_fut_pnl) || 0;
-  const bsNetUpsideToday   = bsUpsideTodayPnl != null ? bsUpsideTodayPnl + futUp_bs : null;
-  const bsNetDownToday     = bsDownTodayPnl   != null ? bsDownTodayPnl   + futDn_bs : null;
-  const bsNetUpsideExpiry  = bsUpsidePnl      != null ? bsUpsidePnl      + futUp_bs : null;
-  const bsNetDownExpiry    = bsDownPnl        != null ? bsDownPnl        + futDn_bs : null;
+  const futUp_bs  = Number(derived.upside_fut_pnl)   || 0;
+  const futDn_bs  = Number(derived.downside_fut_pnl) || 0;
+  const mm_bs     = Number(derived.total_mm_loss)    || 0;
+  const bsNetUpsideToday   = bsUpsideTodayPnl != null ? bsUpsideTodayPnl + futUp_bs + mm_bs : null;
+  const bsNetDownToday     = bsDownTodayPnl   != null ? bsDownTodayPnl   + futDn_bs + mm_bs : null;
+  const bsNetUpsideExpiry  = bsUpsidePnl      != null ? bsUpsidePnl      + futUp_bs + mm_bs : null;
+  const bsNetDownExpiry    = bsDownPnl        != null ? bsDownPnl        + futDn_bs + mm_bs : null;
 
   return (
     <div>
@@ -113,6 +169,39 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
         <form onSubmit={onSubmit} className="xl:col-span-2 space-y-6">
           {error   && <Alert type="error">{error}</Alert>}
           {success && <Alert type="ok">{success}</Alert>}
+
+          {/* Account Selector */}
+          <div className="rounded-xl border border-indigo-500/30 bg-indigo-950/20 p-5 space-y-4">
+            <h2 className="text-sm font-semibold text-indigo-300">Exchange Account</h2>
+            <div className="flex items-center gap-3">
+              <select
+                value={selectedAcct}
+                onChange={e => setSelectedAcct(e.target.value)}
+                className="flex-1 rounded-lg border border-white/10 bg-[#1e2740] px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">— No account (manual entry) —</option>
+                {accounts.map(a => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} · {a.exchange}{a.testnet ? " (Testnet)" : ""}
+                  </option>
+                ))}
+              </select>
+              <a href="/accounts" target="_blank"
+                className="text-xs text-indigo-400 hover:text-indigo-300 whitespace-nowrap transition-colors">
+                + Manage
+              </a>
+            </div>
+
+            {/* Live Option Picker */}
+            {selectedAcct && (
+              <LiveOptionPicker
+                accountId={selectedAcct}
+                token={form.token || "ETH"}
+                optionType={form.option_type || "PUT"}
+                onFill={handleLiveFill}
+              />
+            )}
+          </div>
 
           <Section title="Basic Info">
             <Field label="Entry Date" required><input type="date" value={form.entry_date} onChange={(e) => set("entry_date", e.target.value)} required className={inp} /></Field>
@@ -175,7 +264,29 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
               className="rounded-lg border border-slate-200 px-6 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
               Reset
             </button>
+            <button
+              type="button"
+              onClick={handleExecute}
+              disabled={executing || !selectedAcct}
+              className="rounded-lg bg-orange-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50 transition-colors"
+            >
+              {executing ? "Placing Orders…" : "⚡ Execute (Option + Futures)"}
+            </button>
           </div>
+
+          {/* Execute feedback */}
+          {executeError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              Execute Error: {executeError}
+            </div>
+          )}
+          {executeResult && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 space-y-1">
+              <p className="font-semibold">Orders Placed Successfully</p>
+              {executeResult.option  && <p>Option  — Order ID: {executeResult.option?.order?.order_id  ?? JSON.stringify(executeResult.option)}</p>}
+              {executeResult.futures && <p>Futures — Order ID: {executeResult.futures?.order?.order_id ?? JSON.stringify(executeResult.futures)}</p>}
+            </div>
+          )}
         </form>
 
         {/* RIGHT: live auto-calc panel */}
@@ -199,13 +310,11 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
             <CalcGroup title="📈 Upside">
               <CalcRow label="Opt PnL (Upside)"  value={fmt(derived.upside_opt_pnl)} signed />
               <CalcRow label="Fut PnL (Upside)"  value={fmt(derived.upside_fut_pnl)} signed />
-              <CalcRow label="Est. Net (Upside)"  value={fmt(derived.estimated_upside_net_pnl)} signed big />
             </CalcGroup>
 
             <CalcGroup title="📉 Downside">
               <CalcRow label="Opt PnL (Down)"    value={fmt(derived.down_opt_pnl)} signed />
               <CalcRow label="Fut PnL (Down)"    value={fmt(derived.downside_fut_pnl)} signed />
-              <CalcRow label="Est. Net (Down)"    value={fmt(derived.estimated_downside_net_pnl)} signed big />
             </CalcGroup>
 
             <CalcGroup title="Return">
@@ -213,18 +322,17 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
             </CalcGroup>
 
             <CalcGroup title="📊 BS Option PNL">
-              <CalcRow label={`Upside Opt (Today BS)`}       value={fmt(bsUpsideTodayPnl)} signed />
-              <CalcRow label="Fut PnL (Upside)"              value={fmt(futUp_bs)}          signed />
-              <CalcRow label="Net BS Upside (Today)"         value={fmt(bsNetUpsideToday)}  signed big />
-              <CalcRow label={`Downside Opt (Today BS)`}     value={fmt(bsDownTodayPnl)}    signed />
-              <CalcRow label="Fut PnL (Downside)"            value={fmt(futDn_bs)}          signed />
-              <CalcRow label="Net BS Downside (Today)"       value={fmt(bsNetDownToday)}    signed big />
-              <CalcRow label={`Upside Opt (Expiry)`}         value={fmt(bsUpsidePnl)}       signed />
-              <CalcRow label="Fut PnL (Upside)"              value={fmt(futUp_bs)}          signed />
-              <CalcRow label="Est Net Upside (Expiry)"       value={fmt(bsNetUpsideExpiry)} signed big />
-              <CalcRow label={`Downside Opt (Expiry)`}       value={fmt(bsDownPnl)}         signed />
-              <CalcRow label="Fut PnL (Downside)"            value={fmt(futDn_bs)}          signed />
-              <CalcRow label="Est Net Downside (Expiry)"     value={fmt(bsNetDownExpiry)}   signed big />
+              <CalcRow label="Upside Opt (Today BS)"     value={fmt(bsUpsideTodayPnl)} signed />
+              <CalcRow label="Downside Opt (Today BS)"   value={fmt(bsDownTodayPnl)}   signed />
+              <CalcRow label="Upside Opt (Expiry)"       value={fmt(bsUpsidePnl)}       signed />
+              <CalcRow label="Downside Opt (Expiry)"     value={fmt(bsDownPnl)}         signed />
+              <CalcRow label="Fut PnL (Upside)"          value={fmt(futUp_bs)}          signed />
+              <CalcRow label="Fut PnL (Downside)"        value={fmt(futDn_bs)}          signed />
+              <CalcRow label="Total MM Loss"             value={fmt(mm_bs)}             loss />
+              <CalcRow label="Net BS Upside (Today)"     value={fmt(bsNetUpsideToday)}  signed big />
+              <CalcRow label="Net BS Downside (Today)"   value={fmt(bsNetDownToday)}    signed big />
+              <CalcRow label="Est Net Upside (Expiry)"   value={fmt(bsNetUpsideExpiry)} signed big />
+              <CalcRow label="Est Net Downside (Expiry)" value={fmt(bsNetDownExpiry)}   signed big />
               <CalcRow label={`At Current Price (Today BS, ${dte_bs}d)`} value={fmt(bsTodayPnl)} signed big />
               <CalcRow label="Breakeven Price" value={bsBreakeven != null ? bsBreakeven.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"} />
             </CalcGroup>

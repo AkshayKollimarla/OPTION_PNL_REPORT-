@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useMemo, Suspense } from "react";
+import { useState, useEffect, useRef, useMemo, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { computeDerived, strikeNumber } from "../../../lib/options-calculations";
 import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
+import LiveOptionPicker from "../../../components/LiveOptionPicker";
 
 const RISK_FREE = 0.05;
 
@@ -96,15 +97,28 @@ function SimulatorInner() {
   const isEditMode   = !!editGroup;
 
   // Dynamic array of legs: [{ type, form }]
-  const [legs,    setLegs]    = useState([makeLeg("CALL LONG"), makeLeg("PUT LONG")]);
-  const [editIds, setEditIds] = useState([]); // DB IDs for existing legs (edit mode)
-  const [loadErr, setLoadErr] = useState(null);
-  const [saving,  setSaving]  = useState(false);
-  const [saveMsg, setSaveMsg] = useState(null);
-  const [saveErr, setSaveErr] = useState(null);
+  const [legs,          setLegs]          = useState([makeLeg("CALL LONG"), makeLeg("PUT LONG")]);
+  const [editIds,       setEditIds]       = useState([]); // DB IDs for existing legs (edit mode)
+  const [loadErr,       setLoadErr]       = useState(null);
+  const [saving,        setSaving]        = useState(false);
+  const [saveMsg,       setSaveMsg]       = useState(null);
+  const [saveErr,       setSaveErr]       = useState(null);
+  const [accounts,      setAccounts]      = useState([]);
+  const [selectedAcct,  setSelectedAcct]  = useState("");
+  const [executing,     setExecuting]     = useState(false);
+  const [executeResult, setExecuteResult] = useState(null);
+  const [executeError,  setExecuteError]  = useState(null);
+  const legInstrumentsRef = useRef([]); // [{ option, future }] per leg
 
   // Derived values computed for each leg
   const deriveds = useMemo(() => legs.map((l) => computeDerived(l.form)), [legs]);
+
+  useEffect(() => {
+    fetch("/api/accounts")
+      .then(r => r.json())
+      .then(d => setAccounts(d.accounts || []))
+      .catch(() => {});
+  }, []);
 
   // Load existing group in edit mode
   useEffect(() => {
@@ -192,6 +206,57 @@ function SimulatorInner() {
     const opt = (l.form.option_type || "PUT").toUpperCase();
     return s + legBsTodayPnl(l.form, opt, S - (parseFloat(l.form.down_distance) || 0));
   }, 0);
+
+  function handleLiveFill(legIdx, { expiry, strike, option_type, opt_entry_price, iv, fut_entry_price, instrument_name, future_instrument }) {
+    setLegField(legIdx, "options_strike",  strike);
+    setLegField(legIdx, "expiry",          expiry);
+    setLegField(legIdx, "option_type",     option_type);
+    setLegField(legIdx, "opt_entry_price", opt_entry_price);
+    setLegField(legIdx, "iv",              iv);
+    setLegField(legIdx, "fut_entry_price", fut_entry_price);
+    // Sync leg type badge
+    const isCall  = option_type === "CALL";
+    const isShort = legs[legIdx]?.type.endsWith("SHORT");
+    changeLegType(legIdx, `${isCall ? "CALL" : "PUT"} ${isShort ? "SHORT" : "LONG"}`);
+    // Store instrument refs
+    const newRefs = [...legInstrumentsRef.current];
+    newRefs[legIdx] = { option: instrument_name, future: future_instrument };
+    legInstrumentsRef.current = newRefs;
+  }
+
+  async function handleExecute() {
+    setExecuteError(null); setExecuteResult(null);
+    if (!selectedAcct) { setExecuteError("Select an account first."); return; }
+    setExecuting(true);
+    try {
+      const results = [];
+      for (let i = 0; i < legs.length; i++) {
+        const leg    = legs[i];
+        const optQty = parseFloat(leg.form.opt_entry_qty) || 0;
+        const futQty = parseFloat(leg.form.fut_qty) || 0;
+        const refs   = legInstrumentsRef.current[i] || {};
+        const optInst = refs.option || "";
+        const futInst = refs.future || `${(leg.form.token || "ETH").toUpperCase()}-PERPETUAL`;
+
+        if (optQty === 0 && futQty === 0) continue;
+        if (optQty !== 0 && !optInst) { setExecuteError(`Leg ${i+1}: Use Live Market Data to pick the option instrument.`); setExecuting(false); return; }
+
+        const res  = await fetch("/api/execute", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ account_id: selectedAcct, option_instrument: optQty !== 0 ? optInst : null, option_qty: optQty, future_instrument: futQty !== 0 ? futInst : null, future_qty: futQty }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(`Leg ${i+1}: ${data.error || "Execute failed"}`);
+        results.push({ leg: i+1, type: leg.type, ...data.results });
+      }
+      setExecuteResult(results);
+    } catch (e) {
+      setExecuteError(e.message);
+    } finally {
+      setExecuting(false);
+    }
+  }
 
   /* ── Save handlers ──────────────────────────────────── */
   async function saveStrategies() {
@@ -287,6 +352,8 @@ function SimulatorInner() {
               derived={deriveds[idx] || {}}
               canRemove={legs.length > 2}
               onRemove={() => removeLeg(idx)}
+              accountId={selectedAcct}
+              onLiveFill={(data) => handleLiveFill(idx, data)}
             />
           ))}
 
@@ -363,6 +430,53 @@ function SimulatorInner() {
           </div>
         </div>
 
+        {/* ── Account + Execute ── */}
+        <div className="rounded-xl border border-indigo-500/30 bg-indigo-950/10 p-6 space-y-4">
+          <h2 className="text-base font-semibold text-indigo-300">Execute All Legs on Exchange</h2>
+          <div className="flex items-center gap-3">
+            <select
+              value={selectedAcct}
+              onChange={e => setSelectedAcct(e.target.value)}
+              className="flex-1 rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="">— Select Account —</option>
+              {accounts.map(a => (
+                <option key={a.id} value={a.id}>
+                  {a.name} · {a.exchange}{a.testnet ? " (Testnet)" : ""}
+                </option>
+              ))}
+            </select>
+            <a href="/accounts" target="_blank"
+              className="text-xs text-indigo-400 hover:text-indigo-300 whitespace-nowrap transition-colors">
+              + Manage
+            </a>
+          </div>
+          <button
+            onClick={handleExecute}
+            disabled={executing || !selectedAcct}
+            className="w-full rounded-xl bg-orange-600 py-3 text-sm font-bold text-white hover:bg-orange-700 disabled:opacity-40 transition-colors"
+          >
+            {executing ? "Placing Orders…" : `⚡ Execute All ${legs.length} Legs (Options + Futures)`}
+          </button>
+          {executeError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {executeError}
+            </div>
+          )}
+          {executeResult && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 space-y-1">
+              <p className="font-semibold">All Legs Executed Successfully</p>
+              {executeResult.map((r, i) => (
+                <div key={i} className="text-xs">
+                  <span className="font-medium">Leg {r.leg} ({r.type})</span>
+                  {r.option  && <span> · Opt#{r.option?.order?.order_id  ?? "?"}</span>}
+                  {r.futures && <span> · Fut#{r.futures?.order?.order_id ?? "?"}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* ── Action buttons ── */}
         <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           {isEditMode ? (
@@ -417,7 +531,7 @@ export default function CombinedSimulator() {
 
 /* ── Leg Card ─────────────────────────────────────────── */
 
-function LegCard({ label, legType, onLegTypeChange, form, set, derived, canRemove, onRemove }) {
+function LegCard({ label, legType, onLegTypeChange, form, set, derived, canRemove, onRemove, accountId, onLiveFill }) {
   const inp   = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
   const style = LEG_STYLES[legType];
 
@@ -444,6 +558,15 @@ function LegCard({ label, legType, onLegTypeChange, form, set, derived, canRemov
       </div>
 
       <div className="p-5 space-y-4">
+        {/* Live option picker per leg */}
+        {accountId && (
+          <LiveOptionPicker
+            accountId={accountId}
+            token={form.token || "ETH"}
+            optionType={form.option_type || (legType.startsWith("CALL") ? "CALL" : "PUT")}
+            onFill={onLiveFill}
+          />
+        )}
         <div className="grid grid-cols-2 gap-3">
           <F label="Entry Date"><input type="date" value={form.entry_date} onChange={(e) => set("entry_date", e.target.value)} className={inp} /></F>
           <F label="Token"><input type="text" placeholder="BTC, ETH…" value={form.token} onChange={(e) => set("token", e.target.value)} className={inp} /></F>
@@ -489,11 +612,9 @@ function LegCard({ label, legType, onLegTypeChange, form, set, derived, canRemov
           <div className="my-2 border-t border-slate-200" />
           <CalcRow label="Opt PnL (Upside)"  value={fmt(derived.upside_opt_pnl)} signed />
           <CalcRow label="Fut PnL (Upside)"  value={fmt(derived.upside_fut_pnl)} signed />
-          <CalcRow label="Est. Net (Upside)" value={fmt(derived.estimated_upside_net_pnl)} signed big />
           <div className="my-2 border-t border-slate-200" />
           <CalcRow label="Opt PnL (Down)"    value={fmt(derived.down_opt_pnl)} signed />
           <CalcRow label="Fut PnL (Down)"    value={fmt(derived.downside_fut_pnl)} signed />
-          <CalcRow label="Est. Net (Down)"   value={fmt(derived.estimated_downside_net_pnl)} signed big />
           <div className="my-2 border-t border-slate-200" />
           <CalcRow label="APY"               value={derived.apy != null ? `${Number(derived.apy).toFixed(2)}%` : "—"} signed big />
           <BsStrip form={form} legType={legType} derived={derived} />
@@ -640,25 +761,25 @@ function BsStrip({ form, legType, derived }) {
       {(() => {
         const futUp = Number(derived?.upside_fut_pnl)   || 0;
         const futDn = Number(derived?.downside_fut_pnl) || 0;
-        const netUpToday  = bsUpToday != null ? bsUpToday + futUp : null;
-        const netDnToday  = bsDnToday != null ? bsDnToday + futDn : null;
-        const netUpExpiry = bsUp      != null ? bsUp      + futUp : null;
-        const netDnExpiry = bsDn      != null ? bsDn      + futDn : null;
+        const mm    = Number(derived?.total_mm_loss)    || 0;
+        const netUpToday  = bsUpToday != null ? bsUpToday + futUp + mm : null;
+        const netDnToday  = bsDnToday != null ? bsDnToday + futDn + mm : null;
+        const netUpExpiry = bsUp      != null ? bsUp      + futUp + mm : null;
+        const netDnExpiry = bsDn      != null ? bsDn      + futDn + mm : null;
         return (
           <>
-            <CalcRow label="Upside Opt (Today BS)"       value={fmt(bsUpToday)}   signed />
-            <CalcRow label="Fut PnL (Upside)"            value={fmt(futUp)}       signed />
-            <CalcRow label="Net BS Upside (Today)"       value={fmt(netUpToday)}  signed big />
-            <CalcRow label="Downside Opt (Today BS)"     value={fmt(bsDnToday)}   signed />
-            <CalcRow label="Fut PnL (Downside)"          value={fmt(futDn)}       signed />
-            <CalcRow label="Net BS Downside (Today)"     value={fmt(netDnToday)}  signed big />
-            <CalcRow label="Upside Opt (Expiry)"         value={fmt(bsUp)}        signed />
-            <CalcRow label="Fut PnL (Upside)"            value={fmt(futUp)}       signed />
-            <CalcRow label="Est Net Upside (Expiry)"     value={fmt(netUpExpiry)} signed big />
-            <CalcRow label="Downside Opt (Expiry)"       value={fmt(bsDn)}        signed />
-            <CalcRow label="Fut PnL (Downside)"          value={fmt(futDn)}       signed />
-            <CalcRow label="Est Net Downside (Expiry)"   value={fmt(netDnExpiry)} signed big />
-            <CalcRow label="At Current Price (Today BS)" value={fmt(bsToday)}     signed big />
+            <CalcRow label="Upside Opt (Today BS)"     value={fmt(bsUpToday)}   signed />
+            <CalcRow label="Downside Opt (Today BS)"   value={fmt(bsDnToday)}   signed />
+            <CalcRow label="Upside Opt (Expiry)"       value={fmt(bsUp)}        signed />
+            <CalcRow label="Downside Opt (Expiry)"     value={fmt(bsDn)}        signed />
+            <CalcRow label="Fut PnL (Upside)"          value={fmt(futUp)}       signed />
+            <CalcRow label="Fut PnL (Downside)"        value={fmt(futDn)}       signed />
+            <CalcRow label="Total MM Loss"             value={fmt(mm)}          neg />
+            <CalcRow label="Net BS Upside (Today)"     value={fmt(netUpToday)}  signed big />
+            <CalcRow label="Net BS Downside (Today)"   value={fmt(netDnToday)}  signed big />
+            <CalcRow label="Est Net Upside (Expiry)"   value={fmt(netUpExpiry)} signed big />
+            <CalcRow label="Est Net Downside (Expiry)" value={fmt(netDnExpiry)} signed big />
+            <CalcRow label="At Current Price (Today BS)" value={fmt(bsToday)}   signed big />
             <CalcRow label="Breakeven"
               value={bsBE != null ? bsBE.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"} />
           </>

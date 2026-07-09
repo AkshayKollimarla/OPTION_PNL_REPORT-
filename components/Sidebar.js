@@ -16,6 +16,7 @@ const optionsNav = [
   { href: "/options/add",        label: "Add Strategy",        icon: PlusIcon       },
   { href: "/options/simulator",  label: "Combined Simulator",  icon: SimulatorIcon  },
   { href: "/options/analysis",   label: "Options Analysis",    icon: ChartIcon      },
+  { href: "/accounts",           label: "Accounts",            icon: AccountsIcon   },
 ];
 
 export default function Sidebar() {
@@ -146,6 +147,16 @@ function ReportIcon({ className }) {
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <rect x="4" y="2" width="16" height="20" rx="2" />
       <path d="M8 7h8M8 11h8M8 15h5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function AccountsIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" strokeLinecap="round" />
+      <path d="M18 3l1.5 1.5L21 3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
