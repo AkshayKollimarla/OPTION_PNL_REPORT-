@@ -145,10 +145,9 @@ function SimulatorInner() {
   const [executeError,  setExecuteError]  = useState(null);
 
   // Smart per-leg entry engine (maker-chase options, market futures — same
-  // policy as the single-strategy page, run sequentially leg by leg).
+  // policy as the single-strategy page — all legs placed in parallel).
   const [comboEntryPhase, setComboEntryPhase] = useState("idle"); // idle|running|done|error
   const [comboEntryLogs,  setComboEntryLogs]  = useState([]);
-  const [comboLegIndex,   setComboLegIndex]   = useState(-1);
   const comboCancelRef      = useRef(false);
   const comboFilledLegsRef  = useRef([]);
   const comboGroupIdRef     = useRef(null);
@@ -429,47 +428,82 @@ function SimulatorInner() {
         if (balances[currency] != null) setLegBulk(i, { investment: String(balances[currency]) });
       });
 
-      for (let i = 0; i < legs.length; i++) {
-        const leg    = legs[i];
+      // Build + validate every leg's plan up front — fail fast before
+      // placing anything, and so both phases below can address legs by a
+      // stable index.
+      const plans = [];
+      legs.forEach((leg, i) => {
         const optQty = parseFloat(leg.form.opt_entry_qty) || 0;
         const futQty = parseFloat(leg.form.fut_qty) || 0;
-        if (optQty === 0 && futQty === 0) continue;
-        const currency = (leg.form.token || "ETH").toUpperCase();
-        const optInst  = buildDeribitInst(leg.form.token, leg.form.expiry, leg.form.options_strike, leg.form.option_type);
-        const futInst  = buildFuturesInst(leg.form.token, leg.form.fut_instrument_type);
+        if (optQty === 0 && futQty === 0) return;
+        const optInst = buildDeribitInst(leg.form.token, leg.form.expiry, leg.form.options_strike, leg.form.option_type);
+        const futInst = buildFuturesInst(leg.form.token, leg.form.fut_instrument_type);
         if (optQty !== 0 && !optInst) throw new Error(`Leg ${i + 1}: Select expiry and strike to determine the option instrument.`);
+        plans.push({ i, leg, optQty, futQty, currency: (leg.form.token || "ETH").toUpperCase(), optInst, futInst });
+      });
 
-        setComboLegIndex(i);
-        addComboLog(`— Leg ${i + 1} (${leg.type}) —`);
+      // Phase 1 — every leg's OPTION placed at the same time (each still
+      // chases its own mid independently) instead of one after another, so
+      // the underlying price hasn't had time to drift between legs by the
+      // time the last one goes in.
+      addComboLog(`Placing ${plans.length} leg(s)' options simultaneously so entry prices stay close together...`);
+      const optOutcomes = await Promise.allSettled(plans.map(async (p) => {
+        if (p.optQty === 0) return null;
+        addComboLog(`Leg ${p.i + 1} (${p.leg.type}): placing option`);
+        return await runLegOptionEntry({ accountId: selectedAcct, currency: p.currency, optInst: p.optInst, optQty: p.optQty });
+      }));
 
-        let optFillPrice = null, futFillPrice = null;
-        if (optQty !== 0) {
-          optFillPrice = await runLegOptionEntry({ accountId: selectedAcct, currency, optInst, optQty });
-        }
-        if (futQty !== 0) {
-          futFillPrice = await runLegFuturesEntry({ accountId: selectedAcct, futInst, futQty });
-        }
+      // Phase 2 — futures for whichever legs' options actually filled. A
+      // leg that failed (or was cancelled) is simply skipped here — it has
+      // no position to hedge — but that failure must never block hedging
+      // the OTHER legs that did fill; leaving those unhedged would be worse
+      // than the original failure.
+      addComboLog(`Placing futures hedges for legs whose option filled...`);
+      const futOutcomes = await Promise.allSettled(plans.map(async (p, idx) => {
+        if (p.futQty === 0) return null;
+        if (p.optQty !== 0 && optOutcomes[idx].status === "rejected") return null;
+        return await runLegFuturesEntry({ accountId: selectedAcct, futInst: p.futInst, futQty: p.futQty });
+      }));
 
+      plans.forEach((p, idx) => {
+        const optFillPrice = optOutcomes[idx].status === "fulfilled" ? optOutcomes[idx].value : null;
+        const futFillPrice = futOutcomes[idx].status === "fulfilled" ? futOutcomes[idx].value : null;
         filledLegs.push({
-          legType: leg.type,
-          optInst, optQty, optDir: optQty > 0 ? "sell" : "buy", optFillPrice,
-          futInst, futQty, futDir: futQty > 0 ? "sell" : "buy", futFillPrice,
+          legType: p.leg.type,
+          optInst: p.optInst, optQty: p.optQty, optDir: p.optQty > 0 ? "sell" : "buy", optFillPrice,
+          futInst: p.futInst, futQty: p.futQty, futDir: p.futQty > 0 ? "sell" : "buy", futFillPrice,
         });
-
-        setLegBulk(i, {
+        setLegBulk(p.i, {
           ...(optFillPrice != null ? { opt_entry_price: optFillPrice.toFixed(4) } : {}),
           ...(futFillPrice != null ? { fut_entry_price: String(futFillPrice) } : {}),
         });
-      }
+      });
 
       comboFilledLegsRef.current = filledLegs;
       setExecuteResult(filledLegs);
-      setComboEntryPhase("done");
+
+      const failedLegs = plans.filter((p, idx) =>
+        (p.optQty !== 0 && optOutcomes[idx].status === "rejected") ||
+        (p.futQty !== 0 && optOutcomes[idx].status !== "rejected" && futOutcomes[idx].status === "rejected")
+      );
+      if (failedLegs.length) {
+        failedLegs.forEach((p, idx) => {
+          const optErr = optOutcomes[plans.indexOf(p)].status === "rejected" ? optOutcomes[plans.indexOf(p)].reason?.message || optOutcomes[plans.indexOf(p)].reason : null;
+          const futErr = futOutcomes[plans.indexOf(p)].status === "rejected" ? futOutcomes[plans.indexOf(p)].reason?.message || futOutcomes[plans.indexOf(p)].reason : null;
+          addComboLog(`Leg ${p.i + 1} FAILED — ${optErr || futErr}`);
+        });
+        setComboEntryPhase("error");
+        setExecuteError(
+          `Leg${failedLegs.length > 1 ? "s" : ""} ${failedLegs.map(p => p.i + 1).join(", ")} failed. ` +
+          `Successfully filled legs were entered and hedged — check the log above and retry the failed leg(s) manually.`
+        );
+      } else {
+        setComboEntryPhase("done");
+      }
     } catch (e) {
       setExecuteError(e.message);
       setComboEntryPhase("error");
     } finally {
-      setComboLegIndex(-1);
       setExecuting(false);
     }
   }
@@ -671,7 +705,7 @@ function SimulatorInner() {
           disabled={executing || comboAcStarting || !selectedAcct}
           className="rounded-lg bg-orange-600 px-5 py-2 text-sm font-bold text-white hover:bg-orange-700 disabled:opacity-50 transition-colors whitespace-nowrap"
         >
-          {executing ? `Executing Leg ${comboLegIndex + 1}/${legs.length}…` : comboAcStarting ? "Starting Monitor…" : `⚡ Execute + Auto-Close (${legs.length} legs)`}
+          {executing ? `Executing ${legs.length} legs in parallel…` : comboAcStarting ? "Starting Monitor…" : `⚡ Execute + Auto-Close (${legs.length} legs)`}
         </button>
         {comboEntryPhase === "running" && (
           <button onClick={cancelComboExecute}
