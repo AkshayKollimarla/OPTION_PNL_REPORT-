@@ -6,12 +6,31 @@ export const dynamic = "force-dynamic";
 
 const MANUAL_COLS = [
   "entry_date","token","option_type","investment","options_strike","expiry",
-  "opt_entry_qty","opt_entry_price","opt_exit_price",
-  "fut_qty","fut_entry_price","fut_exit_price",
+  "opt_entry_qty","opt_entry_price","opt_exit_price","iv",
+  "fut_qty","fut_entry_price","fut_exit_price","fut_instrument_type",
   "upside_distance","down_distance","basket_distance","basket_loss",
   "net_booked_pnl","market_making_pl","end_date","status","group_id",
+  "execution_log","target_pnl","initial_collateral_usd","account_id",
 ];
 const ALL_COLS = [...MANUAL_COLS, ...DERIVED_FIELDS];
+
+// Auto-add new columns if they don't exist yet (safe to call repeatedly)
+let _colsMigrated = false;
+async function ensureColumns() {
+  if (_colsMigrated) return;
+  for (const [col, def] of [
+    ["iv",                     "VARCHAR(20) NULL"],
+    ["execution_log",          "LONGTEXT NULL"],
+    ["target_pnl",             "DECIMAL(12,4) NULL"],
+    ["initial_collateral_usd", "DECIMAL(14,4) NULL"],
+    ["account_id",             "INT NULL"],
+    ["fut_instrument_type",    "VARCHAR(20) NULL DEFAULT 'inverse'"],
+  ]) {
+    try { await pool.query(`ALTER TABLE options_trades ADD COLUMN ${col} ${def}`); }
+    catch { /* column already exists */ }
+  }
+  _colsMigrated = true;
+}
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
@@ -57,6 +76,7 @@ export async function GET(request) {
   const ORDER = `ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END,
                  entry_date DESC, id DESC`;
 
+  await ensureColumns();
   try {
     if (groupId) {
       // No pagination for group fetch
@@ -86,6 +106,7 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
+  await ensureColumns();
   let body;
   try { body = await request.json(); }
   catch { return NextResponse.json({ error: "Invalid JSON." }, { status: 400 }); }

@@ -70,10 +70,38 @@ export async function GET(request) {
   try {
     if (exchange === "deribit") {
       if (action === "chain") {
-        const instruments = await dFetch(
-          `/public/get_instruments?currency=${token}&kind=option&expired=false`,
-          testnet
-        );
+        let instruments = [];
+        let chainErr = null;
+        // Try direct currency lookup first; fall back to `any` + prefix filter for
+        // compound tickers like SOL_USDC that Deribit may not accept as currency.
+        try {
+          instruments = await dFetch(
+            `/public/get_instruments?currency=${token}&kind=option&expired=false`,
+            testnet
+          );
+        } catch (err) {
+          chainErr = err.message;
+          console.warn(`[market chain] direct currency=${token} failed: ${err.message}. Trying currency=any…`);
+        }
+
+        if (!instruments?.length) {
+          try {
+            const all = await dFetch(
+              `/public/get_instruments?currency=any&kind=option&expired=false`,
+              testnet
+            );
+            const prefix = token + "-";
+            instruments = (all || []).filter(i => i.instrument_name?.startsWith(prefix));
+            if (instruments.length) chainErr = null; // recovered
+          } catch (e2) {
+            console.error("[market chain] fallback currency=any also failed:", e2.message);
+            if (!chainErr) chainErr = e2.message;
+          }
+        }
+
+        if (!instruments?.length) {
+          return NextResponse.json({ expiries: [], error: chainErr || "No instruments found for " + token }, { status: 200 });
+        }
 
         // Group by expiry date → unique sorted strikes
         const map = {};
@@ -97,14 +125,23 @@ export async function GET(request) {
       }
 
       if (action === "futures") {
+        // Optional explicit override (e.g. "BTC_USDC-PERPETUAL" for the
+        // linear/USDC-margined perpetual) — falls back to the inverse
+        // perpetual derived from token, same as before, when not given.
+        const futInst = instrument || `${token}-PERPETUAL`;
         const ticker = await dFetch(
-          `/public/ticker?instrument_name=${token}-PERPETUAL`,
+          `/public/ticker?instrument_name=${encodeURIComponent(futInst)}`,
           testnet
         );
+        const bid = ticker.best_bid_price ?? 0;
+        const ask = ticker.best_ask_price ?? 0;
         return NextResponse.json({
           mark_price:  ticker.mark_price,
           index_price: ticker.index_price,
-          instrument:  `${token}-PERPETUAL`,
+          instrument:  futInst,
+          best_bid:    bid,
+          best_ask:    ask,
+          mid_price:   bid > 0 && ask > 0 ? (bid + ask) / 2 : ticker.mark_price,
         });
       }
 
@@ -115,13 +152,25 @@ export async function GET(request) {
         );
         const underlying = ticker.underlying_price ?? ticker.index_price ?? 1;
         const raw        = ticker.mark_price ?? 0;
+        const bidRaw     = ticker.best_bid_price ?? 0;
+        const askRaw     = ticker.best_ask_price ?? 0;
+        const midRaw     = bidRaw > 0 && askRaw > 0 ? (bidRaw + askRaw) / 2 : raw;
+        // Linear (USDC-settled) instruments like SOL_USDC: mark_price is already in USDC.
+        // Inverse (coin-settled) like ETH/BTC: mark_price is in coin, must multiply by underlying.
+        const isLinear = token.includes("_USDC") || token.includes("_USDT");
+        const toUsd    = isLinear ? 1 : underlying;
         return NextResponse.json({
           mark_price_raw:   raw,
-          mark_price_usd:   raw * underlying,
+          mark_price_usd:   raw    * toUsd,
           underlying_price: underlying,
           mark_iv:          ticker.mark_iv ?? null,
-          best_bid_usd:     (ticker.best_bid_price ?? 0) * underlying,
-          best_ask_usd:     (ticker.best_ask_price ?? 0) * underlying,
+          best_bid_usd:     bidRaw * toUsd,
+          best_ask_usd:     askRaw * toUsd,
+          best_bid_raw:     bidRaw,
+          best_ask_raw:     askRaw,
+          mid_price_raw:    midRaw,
+          mid_price_usd:    midRaw * toUsd,
+          is_linear:        isLinear,
           instrument,
         });
       }

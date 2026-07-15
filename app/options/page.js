@@ -12,6 +12,7 @@ const STATUS_COLORS = {
 
 export default function OptionsDashboard() {
   const [trades,     setTrades]     = useState([]);
+  const [acctMap,    setAcctMap]    = useState({});   // { id → name }
   const [filter,     setFilter]     = useState("all");
   const [search,     setSearch]     = useState("");
   const [dateFrom,   setDateFrom]   = useState("");
@@ -44,6 +45,18 @@ export default function OptionsDashboard() {
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
+  }, []);
+
+  // Fetch accounts once for name lookup
+  useEffect(() => {
+    fetch("/api/accounts")
+      .then(r => r.json())
+      .then(d => {
+        const map = {};
+        for (const a of d.accounts || []) map[a.id] = a.name || String(a.id);
+        setAcctMap(map);
+      })
+      .catch(() => {});
   }, []);
 
   // Reset to page 1 whenever filters change
@@ -93,7 +106,7 @@ export default function OptionsDashboard() {
     return units;
   }, [trades]);
 
-  const COL_COUNT = 13;
+  const COL_COUNT = 14;
 
   function clearFilters() {
     setSearch(""); setDateFrom(""); setDateTo(""); setFilter("all");
@@ -180,7 +193,7 @@ export default function OptionsDashboard() {
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50 text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                  {["#","Date","Token","Type","Strike","Expiry","Days","Status","Investment","MM PL","Booked PnL","APY","Actions"].map((h) => (
+                  {["#","Date","Token","Account","Type","Strike","Expiry","Days","Status","Investment","MM PL","Booked PnL","APY","Actions"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -217,7 +230,7 @@ export default function OptionsDashboard() {
                           </td>
                         </tr>
                         {unit.members.map((t) => (
-                          <TradeRow key={t.id} t={t} combined groupId={unit.group_id}
+                          <TradeRow key={t.id} t={t} combined groupId={unit.group_id} acctMap={acctMap}
                             confirmId={confirmId} deletingId={deletingId}
                             onConfirm={setConfirmId} onDelete={handleDelete} onCancel={() => setConfirmId(null)} />
                         ))}
@@ -225,7 +238,7 @@ export default function OptionsDashboard() {
                     );
                   }
                   return (
-                    <TradeRow key={unit.trade.id} t={unit.trade} combined={false}
+                    <TradeRow key={unit.trade.id} t={unit.trade} combined={false} acctMap={acctMap}
                       confirmId={confirmId} deletingId={deletingId}
                       onConfirm={setConfirmId} onDelete={handleDelete} onCancel={() => setConfirmId(null)} />
                   );
@@ -281,7 +294,7 @@ function pageWindow(current, total) {
 
 /* ── Trade Row ─────────────────────────────────────────── */
 
-function TradeRow({ t, combined, groupId, confirmId, deletingId, onConfirm, onDelete, onCancel }) {
+function TradeRow({ t, combined, groupId, acctMap, confirmId, deletingId, onConfirm, onDelete, onCancel }) {
   const borderCls = combined
     ? "border-b border-violet-50 border-l-4 border-l-violet-300 bg-violet-50/30 hover:bg-violet-50 transition-colors"
     : "border-b border-slate-50 hover:bg-slate-50 transition-colors";
@@ -293,6 +306,11 @@ function TradeRow({ t, combined, groupId, confirmId, deletingId, onConfirm, onDe
       <td className="px-4 py-3">
         <div className="font-semibold text-slate-800">{t.token}</div>
         {combined && <div className="text-xs text-violet-500 font-medium mt-0.5">leg</div>}
+      </td>
+      <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap">
+        {t.account_id && acctMap[t.account_id] ? (
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">{acctMap[t.account_id]}</span>
+        ) : "—"}
       </td>
       <td className="px-4 py-3">
         <span className={`rounded px-1.5 py-0.5 text-xs font-semibold ${t.option_type === "PUT" ? "bg-red-50 text-red-600" : "bg-green-50 text-green-600"}`}>
@@ -328,6 +346,10 @@ function TradeRow({ t, combined, groupId, confirmId, deletingId, onConfirm, onDe
               Edit / Close
             </Link>
           )}
+          <Link href={`/options/monitor/${t.id}`}
+            className="rounded-lg border border-emerald-500 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-600 hover:text-white transition-colors whitespace-nowrap">
+            Monitor
+          </Link>
           {confirmId === t.id ? (
             <>
               <button onClick={() => onDelete(t.id)} disabled={deletingId === t.id}

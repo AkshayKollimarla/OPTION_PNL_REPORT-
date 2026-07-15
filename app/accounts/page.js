@@ -34,6 +34,8 @@ export default function AccountsPage() {
   const [error, setError]         = useState("");
   const [success, setSuccess]     = useState("");
   const [deleting, setDeleting]   = useState(null);
+  const [testing,  setTesting]   = useState(null);   // account id being tested
+  const [testResult, setTestResult] = useState({});   // { [id]: { ok, message, error, hint, scope, endpoint, client_id_preview } }
 
   async function load() {
     try {
@@ -74,6 +76,20 @@ export default function AccountsPage() {
       setError("Network error");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleTestAuth(id) {
+    setTesting(id);
+    setTestResult(prev => ({ ...prev, [id]: null }));
+    try {
+      const res  = await fetch(`/api/accounts/${id}/test-auth`, { method: "POST" });
+      const data = await res.json();
+      setTestResult(prev => ({ ...prev, [id]: data }));
+    } catch (e) {
+      setTestResult(prev => ({ ...prev, [id]: { ok: false, error: `Network error: ${e.message}` } }));
+    } finally {
+      setTesting(null);
     }
   }
 
@@ -166,42 +182,83 @@ export default function AccountsPage() {
           <p className="text-sm text-slate-400">No accounts saved yet.</p>
         )}
 
-        <div className="space-y-2">
+        <div className="space-y-3">
           {accounts.map(acct => (
             <div key={acct.id}
-              className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold text-slate-800">{acct.name}</span>
-                  {acct.testnet ? (
-                    <span className="rounded-full bg-yellow-100 border border-yellow-200 px-2 py-0.5 text-xs font-medium text-yellow-700">
-                      Testnet
-                    </span>
-                  ) : (
-                    <span className="rounded-full bg-emerald-100 border border-emerald-200 px-2 py-0.5 text-xs font-medium text-emerald-700">
-                      Live
-                    </span>
-                  )}
+              className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 space-y-2">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-slate-800">{acct.name}</span>
+                    {acct.testnet ? (
+                      <span className="rounded-full bg-yellow-100 border border-yellow-200 px-2 py-0.5 text-xs font-medium text-yellow-700">
+                        Testnet
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-emerald-100 border border-emerald-200 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                        Live
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <span className="capitalize font-medium">{acct.exchange}</span>
+                    {acct.api_key && (
+                      <>
+                        <span>·</span>
+                        <span>Key: {acct.api_key.slice(0, 8)}…</span>
+                      </>
+                    )}
+                    <span>·</span>
+                    <span>ID #{acct.id}</span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 text-xs text-slate-400">
-                  <span className="capitalize font-medium">{acct.exchange}</span>
-                  {acct.api_key && (
-                    <>
-                      <span>·</span>
-                      <span>Key: {acct.api_key.slice(0, 8)}…</span>
-                    </>
-                  )}
-                  <span>·</span>
-                  <span>ID #{acct.id}</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleTestAuth(acct.id)}
+                    disabled={testing === acct.id}
+                    className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-100 disabled:opacity-50 transition-colors"
+                  >
+                    {testing === acct.id ? "Testing…" : "Test Connection"}
+                  </button>
+                  <button
+                    onClick={() => handleDelete(acct.id, acct.name)}
+                    disabled={deleting === acct.id}
+                    className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-100 disabled:opacity-50 transition-colors"
+                  >
+                    {deleting === acct.id ? "…" : "Delete"}
+                  </button>
                 </div>
               </div>
-              <button
-                onClick={() => handleDelete(acct.id, acct.name)}
-                disabled={deleting === acct.id}
-                className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-100 disabled:opacity-50 transition-colors"
-              >
-                {deleting === acct.id ? "…" : "Delete"}
-              </button>
+
+              {/* Test result */}
+              {testResult[acct.id] && (
+                <div className={`rounded-lg border px-3 py-2 text-xs space-y-1 ${
+                  testResult[acct.id].ok
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-red-200 bg-red-50 text-red-700"
+                }`}>
+                  {testResult[acct.id].ok ? (
+                    <>
+                      <p className="font-semibold">✓ {testResult[acct.id].message}</p>
+                      {testResult[acct.id].scope && <p>Scope: <span className="font-mono">{testResult[acct.id].scope}</span></p>}
+                      <p className="text-emerald-500">Endpoint: {testResult[acct.id].endpoint}</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="font-semibold">✗ {testResult[acct.id].error}</p>
+                      {testResult[acct.id].hint && (
+                        <p className="text-orange-600 font-medium">⚠ {testResult[acct.id].hint}</p>
+                      )}
+                      {testResult[acct.id].client_id_preview && (
+                        <p>Client ID used: <span className="font-mono">{testResult[acct.id].client_id_preview}</span></p>
+                      )}
+                      {testResult[acct.id].endpoint && (
+                        <p>Endpoint: {testResult[acct.id].endpoint}</p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

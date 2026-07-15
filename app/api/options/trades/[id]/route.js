@@ -35,10 +35,11 @@ export async function PUT(request, { params }) {
 
     const updateable = [
       "entry_date","token","option_type","investment","options_strike","expiry",
-      "opt_entry_qty","opt_entry_price","opt_exit_price",
+      "opt_entry_qty","opt_entry_price","opt_exit_price","iv",
       "fut_qty","fut_entry_price","fut_exit_price",
       "upside_distance","down_distance","basket_distance","basket_loss",
       "net_booked_pnl","market_making_pl","end_date","status","group_id",
+      "execution_log","target_pnl","initial_collateral_usd","account_id",
       ...DERIVED_FIELDS,
     ];
 
