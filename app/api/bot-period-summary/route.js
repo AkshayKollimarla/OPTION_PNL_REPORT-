@@ -51,7 +51,7 @@ export async function GET(request) {
         SUM(COALESCE(rebates, 0))              AS rebates,
         SUM(COALESCE(flatten_pnl, 0))          AS flatten_pnl,
         SUM(COALESCE(gamma_booked, 0))         AS gamma_booked,
-        SUM(COALESCE(rtp_pnl, 0)) + SUM(COALESCE(gamma_booked, 0)) + SUM(COALESCE(rebates, 0)) AS net_pnl,
+        SUM(COALESCE(rtp_pnl, 0)) + SUM(COALESCE(rebates, 0)) AS net_pnl,
         SUM(COALESCE(rtp_pnl, 0))              AS rtp_pnl,
         SUM(COALESCE(volume, 0))               AS volume,
         SUM(COALESCE(investment, 0))           AS total_investment,
@@ -74,7 +74,7 @@ export async function GET(request) {
         AVG(COALESCE(per_hour_rtps, 0))       AS per_hour_rtps,
         SUM(COALESCE(rebates, 0))             AS rebates,
         SUM(COALESCE(flatten_pnl, 0))         AS flatten_pnl,
-        SUM(COALESCE(rtp_pnl, 0)) + SUM(COALESCE(gamma_booked, 0)) + SUM(COALESCE(rebates, 0)) AS net_pnl,
+        SUM(COALESCE(rtp_pnl, 0)) + SUM(COALESCE(rebates, 0)) AS net_pnl,
         SUM(COALESCE(rtp_pnl, 0))             AS rtp_pnl,
         SUM(COALESCE(volume, 0))              AS volume
       FROM bot_entries
@@ -83,9 +83,11 @@ export async function GET(request) {
       ORDER BY DATE(entry_datetime)
     `, params);
 
-    // Best net_pnl entry (full row — for bot input parameters)
+    // Best net_pnl entry (full row — for bot input parameters). Order by the
+    // live formula, not the stored net_pnl column, since older rows were
+    // saved under the previous formula (which included gamma_booked).
     const [bestPnlRows] = await pool.query(
-      `SELECT * FROM bot_entries ${where} ORDER BY net_pnl DESC LIMIT 1`, params
+      `SELECT * FROM bot_entries ${where} ORDER BY (COALESCE(rtp_pnl,0) + COALESCE(rebates,0)) DESC LIMIT 1`, params
     );
 
     // Best rtps entry (full row)
@@ -117,5 +119,5 @@ export async function GET(request) {
 
 function recomputeNetPnl(row) {
   const n = (v) => Number(v) || 0;
-  return { ...row, net_pnl: n(row.rtp_pnl) + n(row.gamma_booked) + n(row.rebates) };
+  return { ...row, net_pnl: n(row.rtp_pnl) + n(row.rebates) };
 }

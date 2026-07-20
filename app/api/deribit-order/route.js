@@ -101,11 +101,16 @@ export async function POST(request) {
     // Inverse futures (e.g. ETH-PERPETUAL, BTC-PERPETUAL) are quoted in USD
     // notional with a fixed contract size (1 USD for ETH, 10 USD for BTC) —
     // "amount" must be an integer multiple of contract_size, not a coin qty.
-    // Linear contracts (SOL_USDC-PERPETUAL, options) take the coin qty as-is.
+    //
+    // Options and linear futures take "amount" as a number of CONTRACTS, not
+    // raw coin qty. For BTC/ETH, contract_size is 1 (1 contract = 1 BTC/ETH)
+    // so this has always been a no-op. But altcoin instruments like
+    // SOL_USDC/XRP_USDC use contract_size > 1 (e.g. 1 contract = 10 SOL) —
+    // sending the raw coin qty there overshoots the order by that multiple.
     let amount = Math.abs(Number(qty));
     const isInverseFuture = info?.kind === "future" && info?.future_type && info.future_type !== "linear";
+    const contractSize = info?.contract_size || 1;
     if (isInverseFuture) {
-      const contractSize = info.contract_size || 1;
       let refPrice = effectivePrice;
       if (!refPrice) {
         try {
@@ -122,6 +127,10 @@ export async function POST(request) {
       } else {
         console.warn(`[deribit-order] could not get reference price for ${instrument}, sending raw qty as amount`);
       }
+    } else if (contractSize > 1) {
+      const contracts = Math.max(1, Math.round(amount / contractSize));
+      console.log(`[deribit-order] ${instrument}: coin_qty=${amount}, contract_size=${contractSize} → amount(contracts)=${contracts}`);
+      amount = contracts;
     }
 
     const params = {

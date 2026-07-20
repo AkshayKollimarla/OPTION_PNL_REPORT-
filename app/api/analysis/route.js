@@ -26,9 +26,9 @@ export async function GET(request) {
          MAX(rtps)       AS max_rtps,
          MIN(rtps)       AS min_rtps,
          AVG(rtps)       AS avg_rtps,
-         MAX(rtp_pnl + gamma_booked + rebates)    AS max_net_pnl,
-         MIN(rtp_pnl + gamma_booked + rebates)    AS min_net_pnl,
-         SUM(rtp_pnl + gamma_booked + rebates)    AS total_net_pnl,
+         MAX(rtp_pnl + rebates)    AS max_net_pnl,
+         MIN(rtp_pnl + rebates)    AS min_net_pnl,
+         SUM(rtp_pnl + rebates)    AS total_net_pnl,
          MAX(apy)        AS max_apy,
          MIN(apy)        AS min_apy,
          AVG(apy)        AS avg_apy,
@@ -50,15 +50,17 @@ export async function GET(request) {
       params
     );
 
-    // Best Net-PNL entry
+    // Best Net-PNL entry — order by the live formula, not the stored
+    // net_pnl column, since older rows were saved under the previous
+    // formula (which included gamma_booked).
     const [[bestPnl]] = await pool.query(
-      `SELECT * FROM bot_entries ${W} ORDER BY net_pnl DESC LIMIT 1`,
+      `SELECT * FROM bot_entries ${W} ORDER BY (COALESCE(rtp_pnl,0) + COALESCE(rebates,0)) DESC LIMIT 1`,
       params
     );
 
     // Worst Net-PNL entry
     const [[worstPnl]] = await pool.query(
-      `SELECT * FROM bot_entries ${W} ORDER BY net_pnl ASC LIMIT 1`,
+      `SELECT * FROM bot_entries ${W} ORDER BY (COALESCE(rtp_pnl,0) + COALESCE(rebates,0)) ASC LIMIT 1`,
       params
     );
 
@@ -89,5 +91,5 @@ export async function GET(request) {
 
 function recomputeNetPnl(row) {
   const n = (v) => Number(v) || 0;
-  return { ...row, net_pnl: n(row.rtp_pnl) + n(row.gamma_booked) + n(row.rebates) };
+  return { ...row, net_pnl: n(row.rtp_pnl) + n(row.rebates) };
 }

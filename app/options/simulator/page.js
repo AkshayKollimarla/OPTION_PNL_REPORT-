@@ -408,6 +408,15 @@ function SimulatorInner() {
   async function handleExecute() {
     setExecuteError(null); setExecuteResult(null); setComboEntryLogs([]);
     if (!selectedAcct) { setExecuteError("Select an account first."); return; }
+    // Lock in the group_id now, before anything else — the auto-close job
+    // (created right after execution completes) and any later "Save
+    // Strategy" must share the exact same value, or the Monitor page can
+    // never find the job for a saved leg. Without this, a brand-new (not
+    // edit-mode) strategy would get one group_id for the job (generated
+    // here at execute time) and a completely different one for the saved
+    // trades (generated independently, later, by saveStrategies) — leaving
+    // a live, unmonitored position with an orphaned job nobody can find.
+    if (!comboGroupIdRef.current) comboGroupIdRef.current = editGroup || `combined_${Date.now()}`;
     comboCancelRef.current = false;
     setComboEntryPhase("running");
     setExecuting(true);
@@ -578,6 +587,26 @@ function SimulatorInner() {
     } catch (e) { setComboAcError(e.message); }
   }
 
+  // For a strategy that's already open on the exchange (saved/executed
+  // earlier, no monitor running) — starts the combo job directly off the
+  // currently-loaded leg data, WITHOUT placing any new orders. Edit mode
+  // only, since it needs entry prices/qty that only exist for a saved leg.
+  function startMonitorForExisting() {
+    const filled = legs.map((leg) => {
+      const optQty = parseFloat(leg.form.opt_entry_qty) || 0;
+      const futQty = parseFloat(leg.form.fut_qty) || 0;
+      return {
+        legType: leg.type,
+        optInst: buildDeribitInst(leg.form.token, leg.form.expiry, leg.form.options_strike, leg.form.option_type),
+        optQty, optDir: optQty > 0 ? "sell" : "buy", optFillPrice: parseFloat(leg.form.opt_entry_price) || null,
+        futInst: buildFuturesInst(leg.form.token, leg.form.fut_instrument_type),
+        futQty, futDir: futQty > 0 ? "sell" : "buy", futFillPrice: parseFloat(leg.form.fut_entry_price) || null,
+      };
+    }).filter(l => l.optQty !== 0 || l.futQty !== 0);
+    comboFilledLegsRef.current = filled;
+    startComboAutoClose(filled);
+  }
+
   async function handleExecuteAndAutoClose() {
     if (!(parseFloat(comboTargetPnl) > 0)) { setComboAcError("Enter a Booking PnL Target first."); return; }
     setComboAcError(null);
@@ -589,7 +618,11 @@ function SimulatorInner() {
   async function saveStrategies() {
     setSaving(true); setSaveMsg(null); setSaveErr(null);
     try {
-      const groupId = `combined_${Date.now()}`;
+      // Reuse the group_id an already-run Execute locked in, so the saved
+      // trades line up with whatever auto-close job was created for them —
+      // only generate a fresh one if this strategy was never executed.
+      const groupId = comboGroupIdRef.current || `combined_${Date.now()}`;
+      comboGroupIdRef.current = groupId;
       const ids = await Promise.all(legs.map((leg) =>
         fetch("/api/options/trades", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -711,6 +744,16 @@ function SimulatorInner() {
           <button onClick={cancelComboExecute}
             className="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 whitespace-nowrap">
             ✕ Cancel
+          </button>
+        )}
+        {isEditMode && !comboAcJob?.job && (
+          <button
+            onClick={startMonitorForExisting}
+            disabled={comboAcStarting || executing || !selectedAcct || !(parseFloat(comboTargetPnl) > 0)}
+            title="Starts monitoring this ALREADY-open position using its saved entry prices — places no new orders"
+            className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50 transition-colors whitespace-nowrap"
+          >
+            {comboAcStarting ? "Starting…" : "▶ Start Monitor Only (no new orders)"}
           </button>
         )}
       </div>

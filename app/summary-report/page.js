@@ -179,6 +179,7 @@ export default function SummaryReport() {
           const totalFlatten    = tokens.reduce((s, t) => s + Number(t.flatten_pnl || 0), 0);
           const totalRebates    = tokens.reduce((s, t) => s + Number(t.rebates     || 0), 0);
           const totalGamma      = tokens.reduce((s, t) => s + Number(t.gamma_booked|| 0), 0);
+          const totalVolume     = tokens.reduce((s, t) => s + Number(t.volume     || 0), 0);
           return (
             <div className="rounded-xl border border-slate-200 bg-white shadow-sm divide-y divide-slate-100">
               {/* Row 1 — Net PNL (hero) */}
@@ -193,12 +194,13 @@ export default function SummaryReport() {
                   </div>
                   <span className="text-sm font-bold text-slate-700">Totals</span>
                 </div>
-                <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 px-6 py-5">
+                <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 px-6 py-5">
                   <TotalCell label="Net PNL"     value={data.totalNetPnl} color={data.totalNetPnl >= 0 ? "emerald" : "red"} />
                   <TotalCell label="RTP PNL"     value={totalRtpPnl}     color="emerald" />
                   <TotalCell label="Flatten"     value={totalFlatten}    color={totalFlatten    >= 0 ? "teal"    : "red"} />
                   <TotalCell label="Rebates"     value={totalRebates}    color="orange" />
                   <TotalCell label="Booked Gamma" value={totalGamma}     color="indigo" />
+                  <TotalCell label="Volume"      value={totalVolume}     color="blue" format={fmtVol} />
                 </div>
               </div>
               <p className="px-6 py-2 text-xs text-slate-400">
@@ -214,7 +216,7 @@ export default function SummaryReport() {
 
 /* ── Sub-components ──────────────────────────────────────── */
 
-function TotalCell({ label, value, color }) {
+function TotalCell({ label, value, color, format = fmtCcy }) {
   const colorCls = {
     emerald: "text-emerald-600",
     red:     "text-red-600",
@@ -222,11 +224,12 @@ function TotalCell({ label, value, color }) {
     teal:    "text-teal-600",
     orange:  "text-orange-500",
     indigo:  "text-indigo-600",
+    blue:    "text-blue-600",
   }[color] || "text-slate-700";
   return (
     <div>
       <p className="text-xs text-slate-400 mb-0.5">{label}</p>
-      <p className={`text-base font-bold ${colorCls}`}>{fmtCcy(value)}</p>
+      <p className={`text-base font-bold ${colorCls}`}>{format(value)}</p>
     </div>
   );
 }

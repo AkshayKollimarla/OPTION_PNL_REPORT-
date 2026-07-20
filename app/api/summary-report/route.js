@@ -33,7 +33,7 @@ export async function GET(request) {
         SUM(COALESCE(rebates, 0))       AS rebates,
         SUM(COALESCE(flatten_pnl, 0))   AS flatten_pnl,
         SUM(COALESCE(gamma_booked, 0))  AS gamma_booked,
-        SUM(COALESCE(rtp_pnl, 0)) + SUM(COALESCE(gamma_booked, 0)) + SUM(COALESCE(rebates, 0)) AS net_pnl,
+        SUM(COALESCE(rtp_pnl, 0)) + SUM(COALESCE(rebates, 0)) AS net_pnl,
         SUM(COALESCE(volume, 0))        AS volume,
         SUM(COALESCE(investment, 0))    AS total_investment,
         SUM(COALESCE(rtp_pnl, 0))       AS rtp_pnl

@@ -24,7 +24,7 @@ export async function GET(_req, { params }) {
 
 function recomputeNetPnl(row) {
   const n = (v) => Number(v) || 0;
-  return { ...row, net_pnl: n(row.rtp_pnl) + n(row.gamma_booked) + n(row.rebates) };
+  return { ...row, net_pnl: n(row.rtp_pnl) + n(row.rebates) };
 }
 
 export async function DELETE(_req, { params }) {

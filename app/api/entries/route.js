@@ -112,10 +112,10 @@ export async function POST(request) {
   }
 }
 
-// Net PNL = RTP PNL + Gamma Booked + Rebates (Flatten excluded)
+// Net PNL = RTP PNL + Rebates (Gamma Booked and Flatten shown for reference, excluded)
 function recomputeNetPnl(row) {
   const n = (v) => Number(v) || 0;
-  return { ...row, net_pnl: n(row.rtp_pnl) + n(row.gamma_booked) + n(row.rebates) };
+  return { ...row, net_pnl: n(row.rtp_pnl) + n(row.rebates) };
 }
 
 function dbErrorMessage(err) {

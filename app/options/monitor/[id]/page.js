@@ -52,6 +52,7 @@ const STATUS_COLOR = {
   active:           "bg-blue-100 text-blue-700",
   closing_option:   "bg-yellow-100 text-yellow-700",
   closing_futures:  "bg-orange-100 text-orange-700",
+  closing:          "bg-yellow-100 text-yellow-700", // combo jobs use a single "closing" status, not the split option/futures phases
   completed:        "bg-emerald-100 text-emerald-700",
   failed:           "bg-red-100 text-red-700",
   stopped:          "bg-slate-100 text-slate-500",
@@ -71,8 +72,13 @@ export default function MonitorPage({ params }) {
   const [error,      setError]      = useState(null);
   // Server-side auto-close job(s) for this trade (read-only view)
   const [svrJobs, setSvrJobs] = useState([]);
+  // If this trade is one leg of a Combined Simulator group, its real
+  // target/PnL/equity lives in a combo job (auto_close_combo_jobs), keyed
+  // by group_id — not the single-leg table above at all.
+  const [comboJob, setComboJob] = useState(null); // { job, legs }
   const autoRef  = useRef(null);
   const svrTimer = useRef(null);
+  const comboTimer = useRef(null);
 
   // Load trade + accounts once
   useEffect(() => {
@@ -103,6 +109,30 @@ export default function MonitorPage({ params }) {
     svrTimer.current = setInterval(loadSvrJobs, 10_000);
     return () => clearInterval(svrTimer.current);
   }, [loadSvrJobs]);
+
+  // Load the combo job for this trade's group (if it belongs to one) —
+  // picks the active/closing job if there is one, otherwise the most
+  // recent one so a completed combo's final numbers still show.
+  const loadComboJob = useCallback(async () => {
+    if (!trade?.group_id) return;
+    try {
+      const r = await fetch(`/api/auto-close-combo?group_id=${encodeURIComponent(trade.group_id)}`);
+      const d = await r.json();
+      const jobs = d.jobs || [];
+      if (!jobs.length) return;
+      const target = jobs.find(j => ["active", "closing"].includes(j.status)) || jobs[0];
+      const detailRes = await fetch(`/api/auto-close-combo?id=${target.id}`);
+      const detail = await detailRes.json();
+      if (detail.job) setComboJob(detail);
+    } catch {}
+  }, [trade?.group_id]);
+
+  useEffect(() => {
+    if (!trade?.group_id) return;
+    loadComboJob();
+    comboTimer.current = setInterval(loadComboJob, 10_000);
+    return () => clearInterval(comboTimer.current);
+  }, [trade?.group_id, loadComboJob]);
 
   const refresh = useCallback(async (accountId) => {
     const aid = accountId || acct;
@@ -141,6 +171,14 @@ export default function MonitorPage({ params }) {
     loadSvrJobs();
   }
 
+  async function stopComboJob(id) {
+    if (!confirm(`Stop combo auto-close job #${id}? This stops ALL legs in the group.`)) return;
+    const r = await fetch(`/api/auto-close-combo?id=${id}`, { method: "DELETE" });
+    const d = await r.json();
+    if (!r.ok) { alert(d.error); return; }
+    loadComboJob();
+  }
+
   if (loading) return <div className="p-8 text-sm text-slate-400">Loading…</div>;
   if (error)   return <div className="p-8 text-sm text-red-600">Error: {error}</div>;
   if (!trade)  return <div className="p-8 text-sm text-slate-400">Strategy not found.</div>;
@@ -149,10 +187,17 @@ export default function MonitorPage({ params }) {
   // Prefer the live auto-close job's target/initial collateral — the trade
   // record's fields are a static snapshot from when the strategy was last
   // saved and go stale the moment the target is edited on a running job.
+  // A trade that's one leg of a Combined Simulator group has its real
+  // target/equity in a combo job instead (keyed by group_id, not trade_id) —
+  // fall back to that when there's no single-leg job for this trade.
   const activeJob     = svrJobs.find(j => ["active","closing_option","closing_futures"].includes(j.status));
   const derived      = computeDerived(trade);
-  const target_pnl   = activeJob ? (parseFloat(activeJob.target_pnl) || 0) : (parseFloat(trade.target_pnl) || 0);
-  const init_usd     = activeJob ? (parseFloat(activeJob.initial_total_usd) || 0) : (parseFloat(trade.initial_collateral_usd) || 0);
+  const target_pnl   = activeJob ? (parseFloat(activeJob.target_pnl) || 0)
+                      : comboJob ? (parseFloat(comboJob.job.target_pnl) || 0)
+                      : (parseFloat(trade.target_pnl) || 0);
+  const init_usd     = activeJob ? (parseFloat(activeJob.initial_total_usd) || 0)
+                      : comboJob ? (parseFloat(comboJob.job.initial_total_usd) || 0)
+                      : (parseFloat(trade.initial_collateral_usd) || 0);
   const optQty       = parseFloat(trade.opt_entry_qty)          || 0;
   const optEntry     = parseFloat(trade.opt_entry_price)        || 0;  // USD
   const futQty       = parseFloat(trade.fut_qty)                || 0;
@@ -400,6 +445,79 @@ export default function MonitorPage({ params }) {
             </p>
           )}
         </div>
+
+        {/* ── Combined Strategy Monitor ── */}
+        {trade.group_id && (
+          <div className="rounded-xl border border-violet-200 bg-white p-5 shadow-sm space-y-4">
+            <div>
+              <h2 className="text-sm font-bold text-slate-800">
+                Combined Strategy Monitor
+                <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700">
+                  {trade.group_id}
+                </span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                This strategy is one leg of a combined group — its real target/PnL lives on the combo job below, not on this single leg.
+                Start or stop it from the{" "}
+                <Link href={`/options/simulator?edit_group=${encodeURIComponent(trade.group_id)}`} className="text-brand underline">
+                  Edit Combined Strategy
+                </Link> page.
+              </p>
+            </div>
+
+            {comboJob?.job ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-semibold text-slate-700">Job #{comboJob.job.id}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_COLOR[comboJob.job.status] || "bg-slate-100 text-slate-500"}`}>
+                    {comboJob.job.status.replace(/_/g, " ")}
+                  </span>
+                </div>
+
+                {comboJob.job.last_equity_usd != null && (() => {
+                  const pnl = parseFloat(comboJob.job.last_equity_usd) - parseFloat(comboJob.job.initial_total_usd);
+                  const tgt = parseFloat(comboJob.job.target_pnl);
+                  const pct = tgt > 0 ? Math.min(100, Math.max(0, (pnl / tgt) * 100)) : 0;
+                  return (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-xs text-slate-500">
+                        <span>Initial: ${parseFloat(comboJob.job.initial_total_usd).toFixed(2)}</span>
+                        <span className={`font-bold ${pnl >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                          Live PnL: {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} / +${tgt.toFixed(2)} target
+                        </span>
+                      </div>
+                      <Bar pct={pct} color={pct >= 100 ? "emerald" : pct > 50 ? "blue" : "orange"} />
+                    </div>
+                  );
+                })()}
+
+                {comboJob.legs?.length > 0 && (
+                  <div className="space-y-1 text-xs text-slate-600">
+                    {comboJob.legs.map(leg => (
+                      <div key={leg.id} className="flex items-center gap-2 flex-wrap border-b border-slate-50 py-1">
+                        <span className="font-medium">Leg {leg.leg_index + 1} ({leg.leg_type || "?"}):</span>
+                        <span>{leg.opt_instrument}</span>
+                        <span className={leg.opt_done ? "text-emerald-600" : "text-slate-400"}>{leg.opt_done ? "✓ opt closed" : "opt open"}</span>
+                        {leg.fut_instrument && (
+                          <span className={leg.fut_done ? "text-emerald-600" : "text-slate-400"}>{leg.fut_done ? "✓ fut closed" : "fut open"}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {["active", "closing"].includes(comboJob.job.status) && (
+                  <button onClick={() => stopComboJob(comboJob.job.id)}
+                    className="rounded-lg border border-red-200 bg-red-50 px-4 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-100 transition-colors">
+                    ■ Stop Combo Auto-Close
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400 italic">No combo auto-close job yet for this group.</p>
+            )}
+          </div>
+        )}
 
         {/* ── Auto-Close Job Status ── */}
         <div className="rounded-xl border border-blue-200 bg-white p-5 shadow-sm space-y-4">
