@@ -53,6 +53,13 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   const [saving,  setSaving]  = useState(false);
   const [error,   setError]   = useState(null);
   const [success, setSuccess] = useState(null);
+  // The trade record backing this execution — starts as the `tradeId` prop
+  // in edit mode, or gets filled in by autoSaveTrade() once a fresh
+  // execution completes. Confirmed incident: "Execute + Auto-Close" placed
+  // real orders on Deribit and started monitoring, but never created an
+  // options_trades row at all — the position existed live with no record in
+  // Options Dashboard, and the auto-close job was saved with trade_id=NULL.
+  const [savedTradeId, setSavedTradeId] = useState(tradeId ?? null);
 
   // Account state — restore the saved account when editing, instead of
   // defaulting to "manual entry" and losing the trade's account link.
@@ -210,14 +217,23 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
     }).catch(() => {});
   }, [isEdit, tradeId]);
 
-  // Combined "Execute + Auto-Close" flow — the instant the entry engine
-  // reports "done", immediately start the auto-close job so the initial
+  // The instant the entry engine reports "done": for a fresh (non-edit)
+  // execution, auto-save the strategy to options_trades FIRST — so real
+  // fills always leave a record in Options Dashboard, not just an
+  // orphaned monitoring job — then, for "Execute + Auto-Close", start the
+  // auto-close job against the now-known trade id so the initial
   // collateral snapshot is taken right against the fresh position, not
   // minutes later after a separate manual click.
   useEffect(() => {
-    if (entryPhase === "done" && autoCloseAfterEntry) {
-      setAutoCloseAfterEntry(false);
-      startAutoClose();
+    if (entryPhase === "done") {
+      (async () => {
+        let tid = savedTradeId;
+        if (!isEdit && !tid) tid = await autoSaveTrade();
+        if (autoCloseAfterEntry) {
+          setAutoCloseAfterEntry(false);
+          startAutoClose(tid);
+        }
+      })();
     }
     if (entryPhase === "error" && autoCloseAfterEntry) {
       setAutoCloseAfterEntry(false); // entry failed — don't start a monitor for a position that doesn't exist
@@ -289,11 +305,26 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   }
 
   async function placeOptionEntry(st, midPrice) {
-    addEntryLog(`Placing ${st.optDir} ${Math.abs(st.optQty)}x ${st.optInst} @ mid ${midPrice.toFixed(5)}`);
+    // Re-checked right before every order placement (not just once at the
+    // top of a tick) — the user can click Cancel at any point, including
+    // while a tick is already mid-flight past its own earlier checks. This
+    // is the guard that actually stops a runaway loop, not just the
+    // interval — clearInterval alone doesn't abort work already in progress.
+    if (entryStateRef.current.cancelled) {
+      addEntryLog("Cancelled — not placing a new order.");
+      return;
+    }
+    // Only place the REMAINING unfilled qty — a re-quote after a partial
+    // fill must not place the full original size again on top of what
+    // already filled. Confirmed incident: a 3-lot order partially filled
+    // 2 lots, got cancelled to re-quote, and the replacement was placed for
+    // the full 3 lots again instead of the 1 lot still outstanding.
+    const remainingQty = Math.max(0, Math.abs(st.optQty) - (st.filledSoFar || 0));
+    addEntryLog(`Placing ${st.optDir} ${remainingQty}x ${st.optInst} @ mid ${midPrice.toFixed(5)}`);
     const res = await fetch("/api/deribit-order", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ account_id: st.accountId, instrument: st.optInst, qty: Math.abs(st.optQty), direction: st.optDir, price: midPrice, is_market: false, post_only: false }),
+      body: JSON.stringify({ account_id: st.accountId, instrument: st.optInst, qty: remainingQty, direction: st.optDir, price: midPrice, is_market: false, post_only: false }),
     });
     const data = await res.json();
     if (!res.ok || !data.order_id) {
@@ -303,33 +334,63 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
       setEntryPhase("error");
       return;
     }
-    entryStateRef.current = { ...entryStateRef.current, orderId: data.order_id, orderMid: midPrice };
+    entryStateRef.current = { ...entryStateRef.current, orderId: data.order_id, orderMid: midPrice, orderQty: remainingQty };
     addEntryLog(`Order #${data.order_id.slice(-8)} — ${data.order_state}`);
     if (data.order_state === "filled") {
       addEntryLog("Option filled immediately!");
+      entryStateRef.current = { ...entryStateRef.current, filledSoFar: Math.abs(st.optQty) };
       await triggerFuturesEntry({ ...entryStateRef.current, phase: "futures_pending" });
     }
   }
 
   async function entryPollTick() {
     const st = entryStateRef.current;
-    if (st.phase !== "option_pending" || !st.orderId) return;
+    if (st.phase !== "option_pending" || !st.orderId || st.cancelled) return;
     try {
       const stRes  = await fetch(`/api/deribit-order?account_id=${st.accountId}&order_id=${st.orderId}`);
       const stData = await stRes.json();
-      if (stData.order_state === "filled") {
+      const totalQty  = Math.abs(st.optQty);
+      const filledOnThisOrder = parseFloat(stData.filled_amount ?? 0);
+      const cumFilled = (st.filledSoFar || 0) + filledOnThisOrder;
+
+      if (stData.order_state === "filled" || cumFilled >= totalQty - 1e-9) {
         addEntryLog("Option filled!");
-        await triggerFuturesEntry({ ...st, phase: "futures_pending" });
+        const next = { ...st, filledSoFar: totalQty, phase: "futures_pending" };
+        entryStateRef.current = next;
+        await triggerFuturesEntry(next);
         return;
       }
-      // Check if mid price moved enough to re-place
+      // Check if mid price moved enough to re-place — only for the
+      // remaining unfilled qty, tracked via filledSoFar.
       const tickRes  = await fetch(`/api/market?account_id=${st.accountId}&token=${st.token}&action=ticker&instrument=${encodeURIComponent(st.optInst)}`);
       const tickData = await tickRes.json();
       const newMid   = tickData.mid_price_raw ?? 0;
       if (newMid > 0 && Math.abs(newMid - st.orderMid) > 0.00005) {
-        addEntryLog(`Mid ${st.orderMid.toFixed(5)} → ${newMid.toFixed(5)}, re-placing`);
-        await fetch(`/api/deribit-order?account_id=${st.accountId}&order_id=${st.orderId}`, { method: "DELETE" });
-        await placeOptionEntry(st, newMid);
+        addEntryLog(`Mid ${st.orderMid.toFixed(5)} → ${newMid.toFixed(5)}, re-placing for remaining ${(totalQty - cumFilled).toFixed(4)}`);
+        // Confirm the cancel actually went through before placing a
+        // replacement — otherwise a failed/late cancel (e.g. the order
+        // just filled) leaves the old order live and a new one gets placed
+        // on top of it. Confirmed incident: two full-size orders open
+        // simultaneously, 5 seconds apart. The cancel response also carries
+        // the most accurate filled_amount at the moment of cancellation.
+        const cancelRes  = await fetch(`/api/deribit-order?account_id=${st.accountId}&order_id=${st.orderId}`, { method: "DELETE" });
+        const cancelData = await cancelRes.json().catch(() => ({}));
+        if (!cancelRes.ok) {
+          addEntryLog(`Cancel failed (${cancelData.error || cancelRes.status}) — re-checking next tick instead of placing a duplicate order.`);
+          return;
+        }
+        const cumFilledAtCancel = (st.filledSoFar || 0) + parseFloat(cancelData.filled_amount ?? filledOnThisOrder);
+        if (cumFilledAtCancel >= totalQty - 1e-9) {
+          addEntryLog("Option filled during cancel!");
+          const next = { ...st, filledSoFar: totalQty, phase: "futures_pending" };
+          entryStateRef.current = next;
+          await triggerFuturesEntry(next);
+          return;
+        }
+        entryStateRef.current = { ...st, filledSoFar: cumFilledAtCancel };
+        await placeOptionEntry(entryStateRef.current, newMid);
+      } else if (filledOnThisOrder > 0) {
+        addEntryLog(`Partially filled ${filledOnThisOrder}/${st.orderQty ?? totalQty} on this order — waiting @ ${st.orderMid.toFixed(5)}`);
       } else {
         addEntryLog(`Waiting — order open @ ${st.orderMid.toFixed(5)}`);
       }
@@ -337,12 +398,17 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   }
 
   function cancelEntryOrder() {
+    // Set FIRST, before anything else — every order-placement point checks
+    // this flag fresh (not a stale closure), so it takes effect even if a
+    // tick is already mid-flight past its own earlier checks. clearInterval
+    // alone only stops FUTURE ticks, not work already in progress.
+    entryStateRef.current = { ...entryStateRef.current, cancelled: true };
     clearInterval(entryTimerRef.current);
     const st = entryStateRef.current;
     if (st.orderId && st.accountId) {
       fetch(`/api/deribit-order?account_id=${st.accountId}&order_id=${st.orderId}`, { method: "DELETE" }).catch(() => {});
     }
-    addEntryLog("Order cancelled by user.");
+    addEntryLog("Cancelled by user — no further orders will be placed.");
     entryStateRef.current = { ...entryStateRef.current, phase: "idle" };
     setEntryPhase("idle");
   }
@@ -396,7 +462,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
         phase: "option_pending", accountId: selectedAcct, token: currency,
         optInst, optQty, optDir: optQty > 0 ? "buy" : "sell",
         futInst, futQty, futDir: futQty > 0 ? "buy" : "sell",
-        orderId: null, orderMid: 0,
+        orderId: null, orderMid: 0, filledSoFar: 0, cancelled: false,
       };
 
       await placeOptionEntry(entryStateRef.current, initialMid);
@@ -440,7 +506,34 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
     } catch {}
   }
 
-  async function startAutoClose() {
+  // Saves the strategy to options_trades right after a fresh execution
+  // completes, so it always shows up in Options Dashboard and Monitor even
+  // if the user never clicks the separate manual "Save Strategy" button.
+  // Failure here is non-fatal — the position is already live on Deribit
+  // regardless, so it logs a warning and lets the caller continue rather
+  // than blocking auto-close monitoring from starting.
+  async function autoSaveTrade() {
+    try {
+      const payload = {
+        ...form,
+        target_pnl: parseFloat(acTargetPnl) > 0 ? parseFloat(acTargetPnl) : undefined,
+        account_id: selectedAcct || undefined,
+      };
+      const res  = await fetch("/api/options/trades", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Auto-save failed");
+      setSavedTradeId(json.id);
+      addEntryLog(`Strategy auto-saved to Options Dashboard as #${json.id}.`);
+      return json.id;
+    } catch (e) {
+      addEntryLog(`Warning: could not auto-save to Options Dashboard (${e.message}). The position is live on Deribit — save it manually from here once you're able.`);
+      return null;
+    }
+  }
+
+  async function startAutoClose(tradeIdOverride) {
     setAcError(null);
     const optQty      = parseFloat(form.opt_entry_qty) || 0;
     const futQty      = parseFloat(form.fut_qty) || 0;
@@ -464,7 +557,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          trade_id:          tradeId || null,
+          trade_id:          tradeIdOverride ?? savedTradeId ?? tradeId ?? null,
           account_id:        selectedAcct,
           token,
           opt_instrument:    optInst,
@@ -522,6 +615,11 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   async function onSubmit(e) {
     e.preventDefault();
     setSaving(true); setError(null); setSuccess(null);
+    // A fresh execution may have already auto-saved this strategy
+    // (autoSaveTrade, above) — if so, this must UPDATE that same row, not
+    // create a second one.
+    const effectiveId     = tradeId ?? savedTradeId;
+    const effectiveIsEdit = isEdit || !!savedTradeId;
     try {
       const allLogs = [...entryLogs, ...(acJob?.logs || [])].filter(Boolean).slice(0, 300);
       const payload = {
@@ -531,15 +629,16 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
         initial_collateral_usd: acJob?.initial_total_usd > 0 ? acJob.initial_total_usd : undefined,
         account_id:             selectedAcct || undefined,
       };
-      const url    = isEdit ? `/api/options/trades/${tradeId}` : "/api/options/trades";
-      const method = isEdit ? "PUT" : "POST";
+      const url    = effectiveIsEdit ? `/api/options/trades/${effectiveId}` : "/api/options/trades";
+      const method = effectiveIsEdit ? "PUT" : "POST";
       const res    = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const json   = await res.json();
       if (!res.ok) throw new Error(json.error || "Save failed");
-      if (isEdit) {
+      if (effectiveIsEdit) {
         setSuccess("Strategy updated.");
       } else {
         setSuccess(`Saved as strategy #${json.id}.`);
+        setSavedTradeId(json.id);
         setForm(EMPTY);
       }
     } catch (err) { setError(err.message); }
@@ -899,8 +998,8 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
                 <span className="text-sm font-semibold text-orange-700">Option order open — tracking mid price every 5 s, will re-place if it moves</span>
               </div>
               <button type="button" onClick={cancelEntryOrder}
-                className="shrink-0 rounded border border-red-200 px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50">
-                ✕ Cancel
+                className="shrink-0 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white shadow hover:bg-red-700">
+                ■ STOP
               </button>
             </div>
           )}
@@ -1100,9 +1199,9 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
                   >
                     ■ Stop Auto-Close
                   </button>
-                  {isEdit && (
+                  {savedTradeId && (
                     <Link
-                      href={`/options/monitor/${tradeId}`}
+                      href={`/options/monitor/${savedTradeId}`}
                       className="rounded-lg border border-slate-200 px-4 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
                     >
                       View Full Monitor →

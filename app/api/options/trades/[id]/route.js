@@ -6,6 +6,9 @@ export const dynamic = "force-dynamic";
 
 export async function GET(_req, { params }) {
   const id = Number(params.id);
+  if (!Number.isFinite(id) || id < 1) {
+    return NextResponse.json({ error: "Invalid id." }, { status: 400 });
+  }
   try {
     const [rows] = await pool.query("SELECT * FROM options_trades WHERE id = ? LIMIT 1", [id]);
     if (!rows.length) return NextResponse.json({ error: "Not found." }, { status: 404 });
@@ -20,6 +23,9 @@ const sanitize = (v) => (v === "" || v === undefined) ? null : v;
 
 export async function PUT(request, { params }) {
   const id = Number(params.id);
+  if (!Number.isFinite(id) || id < 1) {
+    return NextResponse.json({ error: "Invalid id." }, { status: 400 });
+  }
   let body;
   try { body = await request.json(); }
   catch { return NextResponse.json({ error: "Invalid JSON." }, { status: 400 }); }
@@ -55,6 +61,9 @@ export async function PUT(request, { params }) {
 
 export async function DELETE(_req, { params }) {
   const id = Number(params.id);
+  if (!Number.isFinite(id) || id < 1) {
+    return NextResponse.json({ error: "Invalid id." }, { status: 400 });
+  }
   try {
     const [result] = await pool.query("DELETE FROM options_trades WHERE id = ?", [id]);
     if (result.affectedRows === 0) return NextResponse.json({ error: "Not found." }, { status: 404 });

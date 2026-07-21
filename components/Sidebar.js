@@ -13,6 +13,7 @@ const nav = [
 
 const optionsNav = [
   { href: "/options",            label: "Options Dashboard",   icon: OptionsIcon    },
+  { href: "/options/monitor",    label: "Monitor",             icon: MonitorIcon    },
   { href: "/options/add",        label: "Add Strategy",        icon: PlusIcon       },
   { href: "/options/simulator",  label: "Combined Simulator",  icon: SimulatorIcon  },
   { href: "/options/analysis",   label: "Options Analysis",    icon: ChartIcon      },
@@ -130,6 +131,15 @@ function OptionsIcon({ className }) {
       <path d="M12 2L2 7l10 5 10-5-10-5z" strokeLinejoin="round" />
       <path d="M2 17l10 5 10-5" strokeLinecap="round" />
       <path d="M2 12l10 5 10-5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MonitorIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h4l2 5 4-14 2 9h6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

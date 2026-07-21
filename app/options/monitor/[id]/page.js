@@ -90,7 +90,12 @@ export default function MonitorPage({ params }) {
       setTrade(td.trade);
       const accts = ad.accounts || [];
       setAccounts(accts);
-      if (accts.length === 1) setAcct(String(accts[0].id));
+      // Use the account this strategy was actually saved/executed with —
+      // don't make the user reselect it every time they open a strategy's
+      // Monitor page. Only fall back to "the one account" when the trade
+      // itself has no account on record.
+      if (td.trade?.account_id) setAcct(String(td.trade.account_id));
+      else if (accts.length === 1) setAcct(String(accts[0].id));
     }).catch(e => setError(e.message))
       .finally(() => setLoading(false));
   }, [tradeId]);

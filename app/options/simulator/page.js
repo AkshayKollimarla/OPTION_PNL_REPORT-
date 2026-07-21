@@ -335,16 +335,32 @@ function SimulatorInner() {
 
   async function runLegOptionEntry({ accountId, currency, optInst, optQty }) {
     const optDir = optQty > 0 ? "buy" : "sell";
+    const totalQty = Math.abs(optQty);
+    // Cumulative fill across all re-quotes for this leg — a re-quote after
+    // a partial fill must place only the REMAINING unfilled qty, not the
+    // full original size again. Confirmed incident: a 3-lot order
+    // partially filled 2 lots, got cancelled to re-quote, and the
+    // replacement was placed for the full 3 lots again instead of the 1
+    // lot still outstanding.
+    let filledSoFar = 0;
 
     async function place(mid) {
-      addComboLog(`Placing ${optDir} ${Math.abs(optQty)}x ${optInst} @ mid ${mid.toFixed(5)}`);
+      // Re-checked right before every order placement, not just once at the
+      // top of a loop iteration — the user can click Cancel at any point,
+      // including while an iteration is already mid-flight past its own
+      // earlier checks. This is the guard that actually stops a runaway
+      // loop; setting the ref alone doesn't abort work already in progress.
+      if (comboCancelRef.current) throw new Error("Cancelled by user");
+      const remainingQty = Math.max(0, totalQty - filledSoFar);
+      addComboLog(`Placing ${optDir} ${remainingQty}x ${optInst} @ mid ${mid.toFixed(5)}`);
       const res = await fetch("/api/deribit-order", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ account_id: accountId, instrument: optInst, qty: Math.abs(optQty), direction: optDir, price: mid, is_market: false, post_only: false }),
+        body: JSON.stringify({ account_id: accountId, instrument: optInst, qty: remainingQty, direction: optDir, price: mid, is_market: false, post_only: false }),
       });
       const data = await res.json();
       if (!res.ok || !data.order_id) throw new Error(`Option order failed: ${data.error}`);
       addComboLog(`Order #${data.order_id.slice(-8)} — ${data.order_state}`);
+      if (data.order_state === "filled") filledSoFar = totalQty;
       return { orderId: data.order_id, mid, filled: data.order_state === "filled" };
     }
 
@@ -368,15 +384,42 @@ function SimulatorInner() {
       }
       const stRes  = await fetch(`/api/deribit-order?account_id=${accountId}&order_id=${orderId}`);
       const stData = await stRes.json();
-      if (stData.order_state === "filled") { addComboLog("Option filled!"); filled = true; break; }
+      const filledOnThisOrder = parseFloat(stData.filled_amount ?? 0);
+      const cumFilled = filledSoFar + filledOnThisOrder;
+      if (stData.order_state === "filled" || cumFilled >= totalQty - 1e-9) {
+        addComboLog("Option filled!");
+        filledSoFar = totalQty;
+        filled = true;
+        break;
+      }
 
       const tRes  = await fetch(`/api/market?account_id=${accountId}&token=${currency}&action=ticker&instrument=${encodeURIComponent(optInst)}`);
       const tData = await tRes.json();
       const newMid = tData.mid_price_raw ?? 0;
       if (newMid > 0 && Math.abs(newMid - mid) > 0.00005) {
-        addComboLog(`Mid ${mid.toFixed(5)} → ${newMid.toFixed(5)}, re-placing`);
-        await fetch(`/api/deribit-order?account_id=${accountId}&order_id=${orderId}`, { method: "DELETE" }).catch(() => {});
+        addComboLog(`Mid ${mid.toFixed(5)} → ${newMid.toFixed(5)}, re-placing for remaining ${(totalQty - cumFilled).toFixed(4)}`);
+        // Confirm the cancel actually went through before placing a
+        // replacement — otherwise a failed/late cancel (e.g. the order
+        // just filled) leaves the old order live and a new one gets placed
+        // on top of it. Confirmed incident: two full-size orders open
+        // simultaneously, 5 seconds apart. The cancel response also carries
+        // the most accurate filled_amount at the moment of cancellation.
+        const cancelRes  = await fetch(`/api/deribit-order?account_id=${accountId}&order_id=${orderId}`, { method: "DELETE" });
+        const cancelData = await cancelRes.json().catch(() => ({}));
+        if (!cancelRes.ok) {
+          addComboLog(`Cancel failed (${cancelData.error || cancelRes.status}) — re-checking next tick instead of placing a duplicate order.`);
+          continue;
+        }
+        filledSoFar = filledSoFar + parseFloat(cancelData.filled_amount ?? filledOnThisOrder);
+        if (filledSoFar >= totalQty - 1e-9) {
+          addComboLog("Option filled during cancel!");
+          filledSoFar = totalQty;
+          filled = true;
+          break;
+        }
         ({ orderId, mid, filled } = await place(newMid));
+      } else if (filledOnThisOrder > 0) {
+        addComboLog(`Partially filled ${filledOnThisOrder} on this order — waiting @ ${mid.toFixed(5)}`);
       } else {
         addComboLog(`Waiting — order open @ ${mid.toFixed(5)}`);
       }
@@ -742,8 +785,8 @@ function SimulatorInner() {
         </button>
         {comboEntryPhase === "running" && (
           <button onClick={cancelComboExecute}
-            className="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 whitespace-nowrap">
-            ✕ Cancel
+            className="rounded-lg bg-red-600 px-5 py-2 text-sm font-bold text-white shadow hover:bg-red-700 whitespace-nowrap">
+            ■ STOP
           </button>
         )}
         {isEditMode && !comboAcJob?.job && (
