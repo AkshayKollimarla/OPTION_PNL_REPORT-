@@ -108,6 +108,8 @@ export default function Analysis() {
               <StatCard label="Max RTPS"        value={s.max_rtps}       fmt="number" color="green" />
               <StatCard label="Min RTPS"        value={s.min_rtps}       fmt="number" color="red"   />
               <StatCard label="Avg RTPS"        value={s.avg_rtps}       fmt="number" color="blue"  />
+              <StatCard label="Total RTPS"      value={s.total_rtps}     fmt="number" color="slate"
+                sub={s.active_days ? `over ${s.active_days} day${s.active_days !== 1 ? "s" : ""}` : undefined} />
               <StatCard label="Total Net-PNL"   value={s.total_net_pnl}  fmt="currency" color="green" />
               <StatCard label="Total Volume"    value={s.total_volume}   fmt="currency" color="blue"  />
               <StatCard label="Best APY"        value={s.max_apy}        fmt="percent" color="purple" />
@@ -148,7 +150,7 @@ const STAT_COLORS = {
   slate:  "text-slate-700 bg-slate-100",
 };
 
-function StatCard({ label, value, fmt, color = "blue" }) {
+function StatCard({ label, value, fmt, color = "blue", sub }) {
   const cls = STAT_COLORS[color] || STAT_COLORS.blue;
   const formatted =
     fmt === "currency" ? formatValue(value, "currency")
@@ -158,6 +160,7 @@ function StatCard({ label, value, fmt, color = "blue" }) {
     <div className="rounded-xl border border-slate-100 bg-white p-4 shadow-card">
       <p className="mb-1 text-xs font-medium text-slate-500">{label}</p>
       <p className={`text-lg font-bold ${cls.split(" ")[0]}`}>{formatted}</p>
+      {sub && <p className="mt-0.5 text-[11px] text-slate-400">{sub}</p>}
     </div>
   );
 }

@@ -26,6 +26,8 @@ export async function GET(request) {
          MAX(rtps)       AS max_rtps,
          MIN(rtps)       AS min_rtps,
          AVG(rtps)       AS avg_rtps,
+         SUM(rtps)       AS total_rtps,
+         COUNT(DISTINCT DATE(entry_datetime)) AS active_days,
          MAX(rtp_pnl + rebates)    AS max_net_pnl,
          MIN(rtp_pnl + rebates)    AS min_net_pnl,
          SUM(rtp_pnl + rebates)    AS total_net_pnl,

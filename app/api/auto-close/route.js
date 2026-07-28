@@ -34,7 +34,7 @@ export async function GET(req) {
     const [rows] = await pool.query(
       `SELECT id, trade_id, account_id, token, opt_instrument, fut_instrument,
               opt_entry_price, opt_close_price, fut_entry_price, fut_close_price,
-              initial_total_usd, final_equity_usd, target_pnl, target_total_usd, status,
+              initial_total_usd, initial_usdc_equity_usd, final_equity_usd, target_pnl, target_total_usd, status,
               last_equity_usd, last_checked_at, created_at, triggered_at, completed_at,
               error_msg
          FROM auto_close_jobs ${where}
@@ -65,6 +65,7 @@ export async function POST(req) {
       fut_dir        = "sell",
       fut_entry_price,
       initial_total_usd,
+      initial_usdc_equity_usd = null,
       target_pnl,
     } = body;
 
@@ -99,19 +100,25 @@ export async function POST(req) {
       `INSERT INTO auto_close_jobs
          (trade_id, account_id, token, opt_instrument, opt_qty, opt_dir, opt_entry_price,
           fut_instrument, fut_qty, fut_dir, fut_entry_price,
-          initial_total_usd, target_pnl, target_total_usd)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          initial_total_usd, initial_usdc_equity_usd, target_pnl, target_total_usd)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         trade_id || null,
         account_id, token, opt_instrument,
         parseFloat(opt_qty), opt_dir, optEntryPrice,
         fut_instrument, parseFloat(fut_qty), fut_dir, futEntryPrice,
-        parseFloat(initial_total_usd), parseFloat(target_pnl), target_total_usd,
+        parseFloat(initial_total_usd),
+        initial_usdc_equity_usd != null ? parseFloat(initial_usdc_equity_usd) : null,
+        parseFloat(target_pnl), target_total_usd,
       ]
     );
 
     const jobId = result.insertId;
 
+    // initial_total_usd is the coin-only baseline for coin-margined tokens
+    // (BTC/ETH) — PnL/target tracking is coin-equity only. USDC equity is
+    // shown here purely for reference, never used in the trigger math.
+    const isCoinMargined = initial_usdc_equity_usd != null;
     const alertResult = await sendTelegramAlert(
       [
         `🟢 <b>Auto-Close Monitor Started</b> — Job #${jobId}`,
@@ -120,8 +127,11 @@ export async function POST(req) {
         optEntryPrice != null ? `Option entry: $${optEntryPrice.toFixed(4)}` : null,
         futEntryPrice != null ? `Futures entry: $${futEntryPrice.toFixed(2)}` : null,
         ``,
-        `Initial collateral: $${parseFloat(initial_total_usd).toFixed(2)}`,
-        `Target: +$${parseFloat(target_pnl).toFixed(2)} → closes at $${target_total_usd.toFixed(2)}`,
+        isCoinMargined
+          ? `Initial ${token} collateral: $${parseFloat(initial_total_usd).toFixed(2)}`
+          : `Initial collateral: $${parseFloat(initial_total_usd).toFixed(2)}`,
+        isCoinMargined ? `Initial USDC collateral: $${parseFloat(initial_usdc_equity_usd).toFixed(2)} (reference only)` : null,
+        `Target: +$${parseFloat(target_pnl).toFixed(2)} → closes at $${target_total_usd.toFixed(2)}${isCoinMargined ? ` ${token} equity` : ""}`,
       ].filter(Boolean).join("\n")
     );
 

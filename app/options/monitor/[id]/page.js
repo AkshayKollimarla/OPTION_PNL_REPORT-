@@ -212,8 +212,13 @@ export default function MonitorPage({ params }) {
   const daysLeft     = daysFromToday(trade.expiry);
   const T_years      = Math.max(0.0001, daysLeft / 365);
 
-  // Live equity PnL
-  const live_usd    = balance?.total_usd ?? 0;
+  // Live equity PnL — coin-equity only for coin-margined tokens (BTC/ETH),
+  // matching the auto-close worker's trigger basis. Must stay consistent
+  // with init_usd above (now the coin-only baseline for those tokens),
+  // otherwise this would compare a coin-only baseline against a combined
+  // total and show a meaningless number.
+  const isCoinMargined = !!(balance?.coin_symbol && balance.coin_symbol !== "USDC");
+  const live_usd    = isCoinMargined ? (balance?.coin_equity_usd ?? 0) : (balance?.total_usd ?? 0);
   const equity_pnl  = init_usd > 0 ? live_usd - init_usd : null;
   const eq_progress = target_pnl > 0 && equity_pnl != null ? (equity_pnl / target_pnl) * 100 : 0;
 

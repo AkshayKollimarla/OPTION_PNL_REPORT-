@@ -34,7 +34,7 @@ export async function GET(req) {
     const where = groupId ? "WHERE group_id = ?" : "";
     const args  = groupId ? [groupId] : [];
     const [rows] = await pool.query(
-      `SELECT id, group_id, account_id, token, initial_total_usd, final_equity_usd,
+      `SELECT id, group_id, account_id, token, initial_total_usd, initial_usdc_equity_usd, final_equity_usd,
               target_pnl, target_total_usd, status, last_equity_usd, last_checked_at,
               created_at, triggered_at, completed_at, error_msg
          FROM auto_close_combo_jobs ${where}
@@ -59,7 +59,7 @@ export async function POST(req) {
     const body = await req.json();
     const {
       group_id, account_id, token,
-      initial_total_usd, target_pnl,
+      initial_total_usd, initial_usdc_equity_usd = null, target_pnl,
       legs,
     } = body;
 
@@ -92,9 +92,13 @@ export async function POST(req) {
 
     const [result] = await pool.query(
       `INSERT INTO auto_close_combo_jobs
-         (group_id, account_id, token, initial_total_usd, target_pnl, target_total_usd)
-       VALUES (?,?,?,?,?,?)`,
-      [group_id || null, account_id, token, parseFloat(initial_total_usd), parseFloat(target_pnl), target_total_usd]
+         (group_id, account_id, token, initial_total_usd, initial_usdc_equity_usd, target_pnl, target_total_usd)
+       VALUES (?,?,?,?,?,?,?)`,
+      [
+        group_id || null, account_id, token, parseFloat(initial_total_usd),
+        initial_usdc_equity_usd != null ? parseFloat(initial_usdc_equity_usd) : null,
+        parseFloat(target_pnl), target_total_usd,
+      ]
     );
     const jobId = result.insertId;
 
@@ -122,6 +126,10 @@ export async function POST(req) {
       return bits.join(" · ");
     });
 
+    // initial_total_usd is the coin-only baseline for coin-margined tokens
+    // (BTC/ETH) — PnL/target tracking is coin-equity only. USDC equity is
+    // shown here purely for reference, never used in the trigger math.
+    const isCoinMargined = initial_usdc_equity_usd != null;
     const alertResult = await sendTelegramAlert(
       [
         `🟢 <b>Combo Auto-Close Monitor Started</b> — Job #${jobId}`,
@@ -129,9 +137,12 @@ export async function POST(req) {
         ``,
         ...legSummary,
         ``,
-        `Initial collateral: $${parseFloat(initial_total_usd).toFixed(2)}`,
-        `Target: +$${parseFloat(target_pnl).toFixed(2)} → closes at $${target_total_usd.toFixed(2)}`,
-      ].join("\n")
+        isCoinMargined
+          ? `Initial ${token} collateral: $${parseFloat(initial_total_usd).toFixed(2)}`
+          : `Initial collateral: $${parseFloat(initial_total_usd).toFixed(2)}`,
+        isCoinMargined ? `Initial USDC collateral: $${parseFloat(initial_usdc_equity_usd).toFixed(2)} (reference only)` : null,
+        `Target: +$${parseFloat(target_pnl).toFixed(2)} → closes at $${target_total_usd.toFixed(2)}${isCoinMargined ? ` ${token} equity` : ""}`,
+      ].filter(Boolean).join("\n")
     );
 
     const ts   = new Date().toISOString().replace("T", " ").slice(0, 19);

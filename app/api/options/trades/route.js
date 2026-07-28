@@ -9,6 +9,7 @@ const MANUAL_COLS = [
   "opt_entry_qty","opt_entry_price","opt_exit_price","iv",
   "fut_qty","fut_entry_price","fut_exit_price","fut_instrument_type",
   "upside_distance","down_distance","basket_distance","basket_loss",
+  "fut_pnl","opt_pnl",
   "net_booked_pnl","market_making_pl","end_date","status","group_id",
   "execution_log","target_pnl","initial_collateral_usd","account_id",
 ];
@@ -25,6 +26,8 @@ async function ensureColumns() {
     ["initial_collateral_usd", "DECIMAL(14,4) NULL"],
     ["account_id",             "INT NULL"],
     ["fut_instrument_type",    "VARCHAR(20) NULL DEFAULT 'inverse'"],
+    ["fut_pnl",                "DECIMAL(14,4) NULL"],
+    ["opt_pnl",                "DECIMAL(14,4) NULL"],
   ]) {
     try { await pool.query(`ALTER TABLE options_trades ADD COLUMN ${col} ${def}`); }
     catch { /* column already exists */ }

@@ -15,6 +15,7 @@ const EMPTY = {
   fut_qty: "", fut_entry_price: "", fut_exit_price: "", fut_instrument_type: "inverse",
   fut_mid_price: "",      // USD mid price for futures maker limit orders
   upside_distance: "", down_distance: "", basket_distance: "", basket_loss: "",
+  fut_pnl: "", opt_pnl: "",
   net_booked_pnl: "", market_making_pl: "", end_date: "", status: "open",
 };
 
@@ -103,6 +104,7 @@ function tradeToForm(t) {
     opt_entry_qty:    t.opt_entry_qty             ?? "",
     opt_entry_price:  t.opt_entry_price           ?? "",
     opt_exit_price:   t.opt_exit_price            ?? "",
+    iv:               t.iv                         ?? "",
     fut_qty:              t.fut_qty                   ?? "",
     fut_entry_price:      t.fut_entry_price           ?? "",
     fut_exit_price:       t.fut_exit_price            ?? "",
@@ -111,6 +113,8 @@ function tradeToForm(t) {
     down_distance:    t.down_distance             ?? "",
     basket_distance:  t.basket_distance           ?? "",
     basket_loss:      t.basket_loss               ?? "",
+    fut_pnl:          t.fut_pnl                    ?? "",
+    opt_pnl:          t.opt_pnl                    ?? "",
     net_booked_pnl:   t.net_booked_pnl            ?? "",
     market_making_pl: t.market_making_pl          ?? "",
     end_date:         toFormDate(t.end_date)      || "",
@@ -174,6 +178,19 @@ function SimulatorInner() {
   }
 
   const deriveds = useMemo(() => legs.map((l) => computeDerived(l.form)), [legs]);
+
+  // Visual grouping only — CALL legs together, then PUT legs together.
+  // Sorts INDICES, not the legs array itself, so leg_index (execution
+  // order, DB storage, worker log/alert "Leg N" labels) never changes —
+  // only where each card appears on screen. Stable sort (guaranteed in
+  // Node/V8) preserves relative order within each group.
+  const legDisplayOrder = useMemo(
+    () => legs.map((_, i) => i).sort((a, b) => {
+      const groupOf = (t) => (t || "").startsWith("CALL") ? 0 : 1;
+      return groupOf(legs[a].type) - groupOf(legs[b].type);
+    }),
+    [legs]
+  );
 
   useEffect(() => {
     fetch("/api/accounts")
@@ -377,7 +394,7 @@ function SimulatorInner() {
         await fetch(`/api/deribit-order?account_id=${accountId}&order_id=${orderId}`, { method: "DELETE" }).catch(() => {});
         throw new Error("Cancelled by user");
       }
-      await sleep(5000);
+      await sleep(2000);
       if (comboCancelRef.current) {
         await fetch(`/api/deribit-order?account_id=${accountId}&order_id=${orderId}`, { method: "DELETE" }).catch(() => {});
         throw new Error("Cancelled by user");
@@ -396,7 +413,7 @@ function SimulatorInner() {
       const tRes  = await fetch(`/api/market?account_id=${accountId}&token=${currency}&action=ticker&instrument=${encodeURIComponent(optInst)}`);
       const tData = await tRes.json();
       const newMid = tData.mid_price_raw ?? 0;
-      if (newMid > 0 && Math.abs(newMid - mid) > 0.00005) {
+      if (newMid > 0 && Math.abs(newMid - mid) > 0.00002) {
         addComboLog(`Mid ${mid.toFixed(5)} → ${newMid.toFixed(5)}, re-placing for remaining ${(totalQty - cumFilled).toFixed(4)}`);
         // Confirm the cancel actually went through before placing a
         // replacement — otherwise a failed/late cancel (e.g. the order
@@ -588,9 +605,37 @@ function SimulatorInner() {
 
     setComboAcStarting(true);
     try {
-      const token = (legs[0]?.form.token || "ETH").toUpperCase();
-      const bal = await fetch(`/api/balance?account_id=${selectedAcct}&mode=collateral&token=${token}`).then(r => r.json());
-      if (bal.error) throw new Error(bal.error);
+      const token   = (legs[0]?.form.token || "ETH").toUpperCase();
+      const groupId = comboGroupIdRef.current || editGroup || `combined_${Date.now()}`;
+
+      // If this group already has a PRIOR combo job — most commonly a
+      // failed one (IP whitelist block, Deribit outage) — reuse ITS
+      // initial collateral instead of snapshotting current equity fresh.
+      // The position itself never changed; only monitoring stopped and is
+      // being restarted, so the PnL baseline must stay "since the position
+      // was actually entered", not "since this restart".
+      let initialTotalUsd = null;
+      let initialUsdcEquityUsd = null;
+      try {
+        const priorData = await fetch(`/api/auto-close-combo?group_id=${groupId}`).then(r => r.json());
+        const withInitial = (priorData.jobs || [])
+          .filter(j => j.initial_total_usd != null && parseFloat(j.initial_total_usd) > 0)
+          .sort((a, b) => b.id - a.id)[0];
+        if (withInitial) {
+          initialTotalUsd = parseFloat(withInitial.initial_total_usd);
+          initialUsdcEquityUsd = withInitial.initial_usdc_equity_usd != null ? parseFloat(withInitial.initial_usdc_equity_usd) : null;
+        }
+      } catch { /* fall through to a fresh snapshot below */ }
+      if (initialTotalUsd == null) {
+        const bal = await fetch(`/api/balance?account_id=${selectedAcct}&mode=collateral&token=${token}`).then(r => r.json());
+        if (bal.error) throw new Error(bal.error);
+        // PnL/target tracking is coin-equity ONLY for coin-margined tokens
+        // (BTC/ETH) — the USDC side (futures hedge collateral) is excluded
+        // from the trigger decision, only kept for reference in the alert.
+        const isCoinMargined = bal.coin_symbol !== "USDC";
+        initialTotalUsd = isCoinMargined ? (bal.coin_equity_usd ?? 0) : (bal.total_usd ?? 0);
+        initialUsdcEquityUsd = isCoinMargined ? (bal.usdc_equity ?? 0) : null;
+      }
 
       const legsPayload = legsToUse.map(l => ({
         leg_type: l.legType,
@@ -601,10 +646,11 @@ function SimulatorInner() {
       const res = await fetch("/api/auto-close-combo", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          group_id:          comboGroupIdRef.current || editGroup || `combined_${Date.now()}`,
+          group_id:          groupId,
           account_id:        selectedAcct,
           token,
-          initial_total_usd: bal.total_usd ?? 0,
+          initial_total_usd: initialTotalUsd,
+          initial_usdc_equity_usd: initialUsdcEquityUsd,
           target_pnl:        parseFloat(comboTargetPnl),
           legs:               legsPayload,
         }),
@@ -725,9 +771,9 @@ function SimulatorInner() {
           {isEditMode ? "Edit Combined Strategy" : "Combined Strategy Simulator"}
         </h1>
         <div className="flex items-center gap-1.5 flex-wrap">
-          {legs.map((l, i) => (
-            <span key={i} className={`rounded-full px-3 py-0.5 text-xs font-bold border ${LEG_STYLES[l.type].badge}`}>
-              {i > 0 && <span className="mr-1.5 text-slate-300">+</span>}{l.type}
+          {legDisplayOrder.map((idx, pos) => (
+            <span key={idx} className={`rounded-full px-3 py-0.5 text-xs font-bold border ${LEG_STYLES[legs[idx].type].badge}`}>
+              {pos > 0 && <span className="mr-1.5 text-slate-300">+</span>}{legs[idx].type}
             </span>
           ))}
         </div>
@@ -906,22 +952,25 @@ function SimulatorInner() {
       <div className="p-6 space-y-6">
         {/* ── Leg cards ── */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          {legs.map((leg, idx) => (
-            <LegCard
-              key={idx}
-              ref={el => { legRefs.current[idx] = el; }}
-              label={`Leg ${idx + 1}`}
-              legType={leg.type}
-              onLegTypeChange={(t) => changeLegType(idx, t)}
-              form={leg.form}
-              set={(k, v) => setLegField(idx, k, v)}
-              setBulk={(updates) => setLegBulk(idx, updates)}
-              derived={deriveds[idx] || {}}
-              canRemove={legs.length > 2}
-              onRemove={() => removeLeg(idx)}
-              accountId={selectedAcct}
-            />
-          ))}
+          {legDisplayOrder.map((idx) => {
+            const leg = legs[idx];
+            return (
+              <LegCard
+                key={idx}
+                ref={el => { legRefs.current[idx] = el; }}
+                label={`Leg ${idx + 1}`}
+                legType={leg.type}
+                onLegTypeChange={(t) => changeLegType(idx, t)}
+                form={leg.form}
+                set={(k, v) => setLegField(idx, k, v)}
+                setBulk={(updates) => setLegBulk(idx, updates)}
+                derived={deriveds[idx] || {}}
+                canRemove={legs.length > 2}
+                onRemove={() => removeLeg(idx)}
+                accountId={selectedAcct}
+              />
+            );
+          })}
 
           {/* Add Leg card */}
           <button onClick={addLeg}
@@ -1077,6 +1126,20 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
   useEffect(() => {
     if (form.token && !KNOWN_TOKENS.some(t => t.value === form.token)) setManualToken(true);
   }, [form.token]);
+
+  // Net Booked PnL = Futures PnL + Options PnL + Market Making PL — always
+  // derived, never typed directly. Recomputes whenever any of the three
+  // inputs change; stays blank until at least one of them has a value.
+  useEffect(() => {
+    const { fut_pnl, opt_pnl, market_making_pl } = form;
+    if (fut_pnl === "" && opt_pnl === "" && market_making_pl === "") {
+      if (form.net_booked_pnl !== "") setBulk({ net_booked_pnl: "" });
+      return;
+    }
+    const n = (v) => (v === "" || v == null ? 0 : Number(v) || 0);
+    const computed = n(fut_pnl) + n(opt_pnl) + n(market_making_pl);
+    if (String(computed) !== String(form.net_booked_pnl)) setBulk({ net_booked_pnl: computed });
+  }, [form.fut_pnl, form.opt_pnl, form.market_making_pl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Detect DB load: token changed from empty → saved value that already has expiry/price data.
   useEffect(() => {
@@ -1328,8 +1391,14 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
           <F label="Down Distance"><input type="number" step="any" value={form.down_distance} onChange={(e) => set("down_distance", e.target.value)} className={inp} /></F>
           <F label="Basket Distance"><input type="number" step="any" value={form.basket_distance} onChange={(e) => set("basket_distance", e.target.value)} className={inp} /></F>
           <F label="Basket Loss"><input type="number" step="any" value={form.basket_loss} onChange={(e) => set("basket_loss", e.target.value)} className={inp} /></F>
-          <F label="Net Booked PnL"><input type="number" step="any" value={form.net_booked_pnl} onChange={(e) => set("net_booked_pnl", e.target.value)} className={inp} /></F>
+          <F label="Futures PnL"><input type="number" step="any" value={form.fut_pnl} onChange={(e) => set("fut_pnl", e.target.value)} className={inp} /></F>
+          <F label="Options PnL"><input type="number" step="any" value={form.opt_pnl} onChange={(e) => set("opt_pnl", e.target.value)} className={inp} /></F>
           <F label="Market Making PL"><input type="number" step="any" value={form.market_making_pl} onChange={(e) => set("market_making_pl", e.target.value)} className={inp} /></F>
+          <F label="Net Booked PnL (auto)">
+            <input type="number" step="any" value={form.net_booked_pnl} readOnly disabled
+              className={`${inp} bg-slate-50 text-slate-500 cursor-not-allowed`}
+              title="Auto-calculated: Futures PnL + Options PnL + Market Making PL" />
+          </F>
           <F label="Status">
             <select value={form.status} onChange={(e) => set("status", e.target.value)} className={inp}>
               <option value="open">Open</option>

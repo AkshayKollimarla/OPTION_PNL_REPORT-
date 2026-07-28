@@ -14,6 +14,7 @@ const EMPTY = {
   opt_entry_qty:"", opt_entry_price:"", opt_exit_price:"", iv:"",
   fut_qty:"", fut_entry_price:"", fut_exit_price:"", fut_instrument_type:"inverse",
   upside_distance:"", down_distance:"", basket_distance:"", basket_loss:"",
+  fut_pnl:"", opt_pnl:"",
   net_booked_pnl:"", market_making_pl:"", end_date:"", status:"open",
 };
 
@@ -243,6 +244,20 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   // ── Helpers ───────────────────────────────────────────────
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
+  // Net Booked PnL = Futures PnL + Options PnL + Market Making PL — always
+  // derived, never typed directly. Recomputes whenever any of the three
+  // inputs change; stays blank until at least one of them has a value.
+  useEffect(() => {
+    const { fut_pnl, opt_pnl, market_making_pl } = form;
+    if (fut_pnl === "" && opt_pnl === "" && market_making_pl === "") {
+      if (form.net_booked_pnl !== "") set("net_booked_pnl", "");
+      return;
+    }
+    const n = (v) => (v === "" || v == null ? 0 : Number(v) || 0);
+    const computed = n(fut_pnl) + n(opt_pnl) + n(market_making_pl);
+    if (String(computed) !== String(form.net_booked_pnl)) set("net_booked_pnl", computed);
+  }, [form.fut_pnl, form.opt_pnl, form.market_making_pl]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function refreshTicker() {
     preserveRef.current = false;
     const inst  = buildDeribitInst(form.token, form.expiry, form.options_strike, form.option_type);
@@ -365,7 +380,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
       const tickRes  = await fetch(`/api/market?account_id=${st.accountId}&token=${st.token}&action=ticker&instrument=${encodeURIComponent(st.optInst)}`);
       const tickData = await tickRes.json();
       const newMid   = tickData.mid_price_raw ?? 0;
-      if (newMid > 0 && Math.abs(newMid - st.orderMid) > 0.00005) {
+      if (newMid > 0 && Math.abs(newMid - st.orderMid) > 0.00002) {
         addEntryLog(`Mid ${st.orderMid.toFixed(5)} → ${newMid.toFixed(5)}, re-placing for remaining ${(totalQty - cumFilled).toFixed(4)}`);
         // Confirm the cancel actually went through before placing a
         // replacement — otherwise a failed/late cancel (e.g. the order
@@ -467,10 +482,10 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
 
       await placeOptionEntry(entryStateRef.current, initialMid);
 
-      // Start 5-second polling if option still open
+      // Start polling if option still open
       if (entryStateRef.current.phase === "option_pending") {
         clearInterval(entryTimerRef.current);
-        entryTimerRef.current = setInterval(entryPollTick, 5000);
+        entryTimerRef.current = setInterval(entryPollTick, 2000);
       }
     } catch (e) {
       setExecuteError(e.message);
@@ -550,14 +565,45 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
 
     setAcStarting(true);
     try {
-      const bal = await fetch(`/api/balance?account_id=${selectedAcct}&mode=collateral&token=${token}`).then(r => r.json());
-      if (bal.error) throw new Error(bal.error);
+      // If this trade already has a PRIOR auto-close job — most commonly a
+      // failed one (IP whitelist block, Deribit outage) — reuse ITS initial
+      // collateral instead of snapshotting current equity fresh. The
+      // position itself never changed; only monitoring stopped and is
+      // being restarted, so the PnL baseline must stay "since the position
+      // was actually entered", not "since this restart" (which would
+      // silently reset the target's reference point to whatever the
+      // account balance happens to be right now).
+      const effectiveTradeId = tradeIdOverride ?? savedTradeId ?? tradeId ?? null;
+      let initialTotalUsd = null;
+      let initialUsdcEquityUsd = null;
+      if (effectiveTradeId) {
+        try {
+          const priorData = await fetch(`/api/auto-close?trade_id=${effectiveTradeId}`).then(r => r.json());
+          const withInitial = (priorData.jobs || [])
+            .filter(j => j.initial_total_usd != null && parseFloat(j.initial_total_usd) > 0)
+            .sort((a, b) => b.id - a.id)[0];
+          if (withInitial) {
+            initialTotalUsd = parseFloat(withInitial.initial_total_usd);
+            initialUsdcEquityUsd = withInitial.initial_usdc_equity_usd != null ? parseFloat(withInitial.initial_usdc_equity_usd) : null;
+          }
+        } catch { /* fall through to a fresh snapshot below */ }
+      }
+      if (initialTotalUsd == null) {
+        const bal = await fetch(`/api/balance?account_id=${selectedAcct}&mode=collateral&token=${token}`).then(r => r.json());
+        if (bal.error) throw new Error(bal.error);
+        // PnL/target tracking is coin-equity ONLY for coin-margined tokens
+        // (BTC/ETH) — the USDC side (futures hedge collateral) is excluded
+        // from the trigger decision, only kept for reference in the alert.
+        const isCoinMargined = bal.coin_symbol !== "USDC";
+        initialTotalUsd = isCoinMargined ? (bal.coin_equity_usd ?? 0) : (bal.total_usd ?? 0);
+        initialUsdcEquityUsd = isCoinMargined ? (bal.usdc_equity ?? 0) : null;
+      }
 
       const res = await fetch("/api/auto-close", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          trade_id:          tradeIdOverride ?? savedTradeId ?? tradeId ?? null,
+          trade_id:          effectiveTradeId,
           account_id:        selectedAcct,
           token,
           opt_instrument:    optInst,
@@ -568,7 +614,8 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
           fut_qty:           totalFutQty,
           fut_dir:           futQty > 0 ? "sell" : "buy",
           fut_entry_price:   form.fut_entry_price || null,
-          initial_total_usd: bal.total_usd ?? 0,
+          initial_total_usd: initialTotalUsd,
+          initial_usdc_equity_usd: initialUsdcEquityUsd,
           target_pnl:        tPnl,
         }),
       });
@@ -949,8 +996,14 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
 
           {/* ── Close / Booked ── */}
           <Section title="Close / Booked">
-            <Field label="Net Booked PnL"><input type="number" step="any" value={form.net_booked_pnl} onChange={e => set("net_booked_pnl", e.target.value)} className={inp} /></Field>
+            <Field label="Futures PnL"><input type="number" step="any" value={form.fut_pnl} onChange={e => set("fut_pnl", e.target.value)} className={inp} /></Field>
+            <Field label="Options PnL"><input type="number" step="any" value={form.opt_pnl} onChange={e => set("opt_pnl", e.target.value)} className={inp} /></Field>
             <Field label="Market Making PL"><input type="number" step="any" value={form.market_making_pl} onChange={e => set("market_making_pl", e.target.value)} className={inp} /></Field>
+            <Field label="Net Booked PnL (auto)">
+              <input type="number" step="any" value={form.net_booked_pnl} readOnly disabled
+                className={`${inp} bg-slate-50 text-slate-500 cursor-not-allowed`}
+                title="Auto-calculated: Futures PnL + Options PnL + Market Making PL" />
+            </Field>
           </Section>
 
           {/* ── Action buttons ── */}
@@ -978,6 +1031,15 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
                 className="w-28 rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:border-brand focus:outline-none"
               />
             </div>
+            <button
+              type="button"
+              onClick={handleExecute}
+              disabled={executing || acStarting || !selectedAcct || entryPhase === "option_pending" || entryPhase === "futures_pending" || (isExpired && !!parseFloat(form.opt_entry_qty))}
+              title={isExpired && parseFloat(form.opt_entry_qty) ? "This expiry has already passed — pick a current one first" : "Place the orders only — set a target and click Start Auto-Close below whenever you're ready"}
+              className="rounded-lg bg-slate-700 px-6 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50 transition-colors"
+            >
+              {executing && !autoCloseAfterEntry ? "Executing…" : "Execute"}
+            </button>
             <button
               type="button"
               onClick={handleExecuteAndAutoClose}
@@ -1091,7 +1153,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
                   )}
                   <button
                     type="button"
-                    onClick={startAutoClose}
+                    onClick={() => startAutoClose()}
                     disabled={acStarting || !selectedAcct || !currentInst || !parseFloat(acTargetPnl)}
                     className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
                   >
