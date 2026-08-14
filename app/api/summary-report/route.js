@@ -26,7 +26,7 @@ export async function GET(request) {
     const [rows] = await pool.query(`
       SELECT
         token_symbol,
-        token_name,
+        account AS token_name,
         COUNT(*) AS entry_count,
         AVG(COALESCE(rtps, 0))          AS rtps,
         AVG(COALESCE(per_hour_rtps, 0)) AS per_hour_rtps,
@@ -39,7 +39,7 @@ export async function GET(request) {
         SUM(COALESCE(rtp_pnl, 0))       AS rtp_pnl
       FROM bot_entries
       ${whereClause}
-      GROUP BY token_symbol, token_name
+      GROUP BY token_symbol, account
       ORDER BY net_pnl DESC
     `, params);
 

@@ -11,7 +11,9 @@ function buildInst(t) {
   if (!t?.token || !t?.expiry || !t?.options_strike) return null;
   const d = new Date(t.expiry + "T00:00:00Z");
   if (isNaN(d)) return null;
-  return `${t.token.toUpperCase()}-${String(d.getUTCDate()).padStart(2,"0")}${MONTHS[d.getUTCMonth()]}${String(d.getUTCFullYear()).slice(-2)}-${t.options_strike}-${t.option_type === "CALL" ? "C" : "P"}`;
+  // Deribit does NOT zero-pad single-digit days (BTC-1AUG26-..., not
+  // BTC-01AUG26-...) — padding here builds a name Deribit doesn't recognize.
+  return `${t.token.toUpperCase()}-${String(d.getUTCDate())}${MONTHS[d.getUTCMonth()]}${String(d.getUTCFullYear()).slice(-2)}-${t.options_strike}-${t.option_type === "CALL" ? "C" : "P"}`;
 }
 
 // BTC/ETH have both an inverse perpetual (BTC-PERPETUAL) and a USDC-margined
@@ -200,9 +202,12 @@ export default function MonitorPage({ params }) {
   const target_pnl   = activeJob ? (parseFloat(activeJob.target_pnl) || 0)
                       : comboJob ? (parseFloat(comboJob.job.target_pnl) || 0)
                       : (parseFloat(trade.target_pnl) || 0);
-  const init_usd     = activeJob ? (parseFloat(activeJob.initial_total_usd) || 0)
-                      : comboJob ? (parseFloat(comboJob.job.initial_total_usd) || 0)
-                      : (parseFloat(trade.initial_collateral_usd) || 0);
+  // Preserve null when there's genuinely no baseline yet, instead of
+  // collapsing it to 0 — the coin-only baseline (BTC/ETH) can legitimately
+  // be zero or negative (e.g. a futures hedge pushing the coin wallet
+  // negative), so "0 or negative" must not be treated the same as "not set".
+  const _rawInit    = activeJob?.initial_total_usd ?? comboJob?.job?.initial_total_usd ?? trade.initial_collateral_usd;
+  const init_usd     = _rawInit != null && _rawInit !== "" ? parseFloat(_rawInit) : null;
   const optQty       = parseFloat(trade.opt_entry_qty)          || 0;
   const optEntry     = parseFloat(trade.opt_entry_price)        || 0;  // USD
   const futQty       = parseFloat(trade.fut_qty)                || 0;
@@ -219,7 +224,7 @@ export default function MonitorPage({ params }) {
   // total and show a meaningless number.
   const isCoinMargined = !!(balance?.coin_symbol && balance.coin_symbol !== "USDC");
   const live_usd    = isCoinMargined ? (balance?.coin_equity_usd ?? 0) : (balance?.total_usd ?? 0);
-  const equity_pnl  = init_usd > 0 ? live_usd - init_usd : null;
+  const equity_pnl  = init_usd != null ? live_usd - init_usd : null;
   const eq_progress = target_pnl > 0 && equity_pnl != null ? (equity_pnl / target_pnl) * 100 : 0;
 
   // Live BS option PnL
@@ -292,14 +297,16 @@ export default function MonitorPage({ params }) {
         </div>
 
         {/* ── Profit Target Progress ── */}
-        {(target_pnl > 0 || init_usd > 0) && (
+        {(target_pnl > 0 || init_usd != null) && (
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
             <h2 className="text-sm font-bold text-slate-800">Profit Target Monitor</h2>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="rounded-lg bg-slate-50 border border-slate-100 p-3">
-                <p className="text-xs text-slate-400 mb-0.5">Initial Collateral</p>
-                <p className="text-sm font-bold text-slate-700">{init_usd > 0 ? `$${init_usd.toFixed(2)}` : "—"}</p>
+                <p className="text-xs text-slate-400 mb-0.5">{isCoinMargined ? `Initial ${balance?.coin_symbol} Collateral` : "Initial Collateral"}</p>
+                <p className={`text-sm font-bold ${init_usd != null && init_usd < 0 ? "text-red-600" : "text-slate-700"}`}>
+                  {init_usd != null ? `${init_usd < 0 ? "-" : ""}$${Math.abs(init_usd).toFixed(2)}` : "—"}
+                </p>
               </div>
               <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3">
                 <p className="text-xs text-slate-400 mb-0.5">Profit Target</p>
@@ -568,7 +575,10 @@ function ServerJobCard({ job, onStop }) {
   }, [expanded, job.id]);
 
   const isActive = ["active","closing_option","closing_futures"].includes(job.status);
-  const pnl = job.last_equity_usd && job.initial_total_usd
+  // != null, not a truthy check — both values can legitimately be 0 under
+  // the coin-only baseline (BTC/ETH), which "last_equity_usd && ..." would
+  // wrongly treat as "no data" and hide the PnL entirely.
+  const pnl = job.last_equity_usd != null && job.initial_total_usd != null
     ? parseFloat(job.last_equity_usd) - parseFloat(job.initial_total_usd) : null;
   const pct = pnl != null && parseFloat(job.target_pnl) > 0
     ? (pnl / parseFloat(job.target_pnl)) * 100 : 0;
@@ -589,7 +599,7 @@ function ServerJobCard({ job, onStop }) {
       <div className="flex gap-4">
         <span className="text-slate-500">Initial: <strong>${parseFloat(job.initial_total_usd).toFixed(2)}</strong></span>
         <span className="text-slate-500">Target +<strong>${parseFloat(job.target_pnl).toFixed(2)}</strong></span>
-        {job.last_equity_usd && (
+        {job.last_equity_usd != null && (
           <span className={`font-semibold ${pnl >= 0 ? "text-emerald-600" : "text-red-600"}`}>
             Live PnL: {pnl >= 0 ? "+" : ""}${pnl?.toFixed(2) ?? "—"}
           </span>
@@ -597,7 +607,7 @@ function ServerJobCard({ job, onStop }) {
         {job.last_checked_at && <span className="text-slate-400">checked {job.last_checked_at?.slice(11,16)}</span>}
       </div>
 
-      {job.last_equity_usd && parseFloat(job.target_pnl) > 0 && (
+      {job.last_equity_usd != null && parseFloat(job.target_pnl) > 0 && (
         <Bar pct={pct} color={pct >= 100 ? "emerald" : pct > 50 ? "blue" : "orange"} />
       )}
 

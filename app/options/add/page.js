@@ -5,8 +5,25 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { computeDerived, strikeNumber } from "../../../lib/options-calculations";
 import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
+import ExitAllModal from "../../../components/ExitAllModal";
 
 const RISK_FREE = 0.05;
+
+// Show an option premium at the precision the instrument actually trades at.
+// Deribit prices sit on a per-instrument tick grid — SOL_USDC options tick at
+// 0.1, so a mark of 1.5488 is displayed as 1.5, not 1.5488, because no order
+// can exist at the latter. Only applies to linear (USDC/USDT) instruments,
+// where the quote currency is USD; on coin-margined options the tick governs
+// the coin-denominated premium and says nothing about the converted USD
+// figure, so those keep the generic 4dp.
+function fmtOptPrice(value, ticker) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "";
+  if (ticker?.is_linear && ticker?.tick_size > 0) {
+    return n.toFixed(Math.max(0, -Math.floor(Math.log10(ticker.tick_size))));
+  }
+  return n.toFixed(4);
+}
 const KNOWN_TOKENS = ["ETH", "BTC", "SOL_USDC", "XRP_USDC"];
 
 const EMPTY = {
@@ -24,7 +41,9 @@ function buildDeribitInst(token, expiry, strike, optType) {
   const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
   const d = new Date(expiry + "T00:00:00Z");
   if (isNaN(d)) return null;
-  const day = String(d.getUTCDate()).padStart(2, "0");
+  // Deribit does NOT zero-pad single-digit days (BTC-1AUG26-..., not
+  // BTC-01AUG26-...) — padding here builds a name Deribit doesn't recognize.
+  const day = String(d.getUTCDate());
   const mon = MONTHS[d.getUTCMonth()];
   const yr  = String(d.getUTCFullYear()).slice(-2);
   return `${token.toUpperCase()}-${day}${mon}${yr}-${strike}-${optType === "CALL" ? "C" : "P"}`;
@@ -103,6 +122,32 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
     futInst: "", futQty: 0, futDir: "buy",
     orderId: null, orderMid: 0,
   });
+  // Once a leg's TRUE fill price has been captured, nothing may overwrite
+  // form.opt_entry_price / form.fut_entry_price with a fresh ticker quote for
+  // THAT SAME instrument — not the auto ticker-fetch effect, not the manual
+  // Refresh button. Without this, a Refresh click (or the strike/expiry
+  // effect re-firing) between "Execute" finishing and a later "start
+  // auto-close" click clobbers the real fill price with whatever the market
+  // moved to in between, which is exactly what the Telegram entry alert then
+  // reports as the "entry" price. Scoped to the specific instrument (not just
+  // a bare boolean) so that browsing to a DIFFERENT strike/expiry/token after
+  // executing doesn't leave price refresh permanently stuck for the rest of
+  // the page's life — only the exact filled instrument stays locked.
+  // setInterval keeps its 2s cadence no matter how long an async tick takes, so
+  // a slow tick has the next one start ON TOP of it. Both then read
+  // futOrderId as null — the first hasn't written it yet — and both place a
+  // hedge order. Confirmed live: a 2-lot BTC entry put TWO identical futures
+  // orders on the book, which would have doubled the hedge had both filled.
+  // A tick that fires while one is still running is simply skipped; the work
+  // is idempotent and the next fire picks it up 2s later.
+  const tickBusyRef  = useRef(false);
+  // Second, narrower guard: nothing may be placing a hedge order while another
+  // placement is mid-flight, whichever path called in.
+  const hedgeBusyRef = useRef(false);
+  const optFillLockedRef = useRef(false);
+  const futFillLockedRef = useRef(false);
+  const optFillLockedInstRef = useRef(null);
+  const futFillLockedInstRef = useRef(null);
   // Set by the combined "Execute + Auto-Close" button — the moment entry
   // finishes filling, auto-close starts immediately (no manual second click,
   // no gap where the price/PnL can drift before the initial snapshot freezes).
@@ -111,12 +156,80 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   // Auto-close state — drives a server-side job (lib/auto-close-worker.js) so
   // it keeps running even if this tab closes. No client-side execution engine.
   const [acTargetPnl, setAcTargetPnl] = useState("");
+  // 'coin' — track only the strategy's own coin equity (BTC/ETH), ignoring
+  // the USDC/futures-hedge side entirely. 'combined' — track whole account
+  // equity (coin + USDC summed), the original behavior. Only meaningful for
+  // coin-margined tokens; pure-USDC tokens (SOL_USDC, ...) have no choice.
+  // Confirmed incident behind the 'coin' default: a job hit its USDC-driven
+  // target while coin equity was actually negative — a real loss reported
+  // as a win.
+  const [monitorMode, setMonitorMode] = useState("coin");
   const [acJob,        setAcJob]      = useState(null); // full row from /api/auto-close?id=X
   const [acStarting,   setAcStarting] = useState(false);
   const [acError,      setAcError]    = useState(null);
   const [editingTarget, setEditingTarget] = useState(false);
   const [editTargetValue, setEditTargetValue] = useState("");
   const acTimerRef = useRef(null);
+
+  // ── Exit All Positions (manual panic-flatten for this account+token) ──
+  const [exitModalOpen, setExitModalOpen] = useState(false);
+  const [exitLoading,   setExitLoading]   = useState(false);
+  const [exitError,     setExitError]     = useState(null);
+  const [exitPositions, setExitPositions] = useState([]); // live from Deribit
+  const [exitConfirming, setExitConfirming] = useState(false);
+  const [exitJob,       setExitJob]       = useState(null);
+  const [exitCollateralBefore, setExitCollateralBefore] = useState(null);
+  const [exitFetchedAt,        setExitFetchedAt]        = useState(null);
+  const [exitBadIp,            setExitBadIp]            = useState(false);
+  const [exitCrossAfter,       setExitCrossAfter]       = useState("");
+  const [exitCrossAfterUnit,   setExitCrossAfterUnit]   = useState("sec");
+
+  async function openExitModal() {
+    if (!selectedAcct || !form.token) return;
+    setExitModalOpen(true);
+    setExitJob(null);
+    setExitError(null);
+    setExitLoading(true);
+    try {
+      const r = await fetch(`/api/deribit-positions?account_id=${selectedAcct}&token=${(form.token || "").toUpperCase()}`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Failed to fetch live positions");
+      setExitPositions(d.positions || []);
+      setExitCollateralBefore(d.collateral ?? null);
+      setExitBadIp(!!d.badIp);
+      setExitFetchedAt(new Date().toLocaleTimeString());
+    } catch (e) {
+      setExitError(e.message);
+      setExitPositions([]);
+    } finally {
+      setExitLoading(false);
+    }
+  }
+
+  async function confirmExitAll() {
+    setExitConfirming(true);
+    setExitError(null);
+    try {
+      const r = await fetch("/api/deribit-exit-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account_id: selectedAcct,
+          token: (form.token || "").toUpperCase(),
+          cross_after_secs: exitCrossAfter === "" ? null
+            : Math.max(0, Math.round(Number(exitCrossAfter))) * (exitCrossAfterUnit === "min" ? 60 : 1),
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Exit failed");
+      setExitJob(d);
+      if (acJob?.id) pollAcJob(acJob.id);
+    } catch (e) {
+      setExitError(e.message);
+    } finally {
+      setExitConfirming(false);
+    }
+  }
 
   // ── Effects ──────────────────────────────────────────────
   useEffect(() => { setDerived(computeDerived(form)); }, [form]);
@@ -191,9 +304,10 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
         if (cancelled || !data.mark_price_usd) return;
         setTickerInfo({ ...data, instrument: inst });
         setOptMidPriceRaw(data.mid_price_raw ?? data.mark_price_raw ?? 0);
+        const isLocked = optFillLockedRef.current && optFillLockedInstRef.current === inst;
         setForm(f => ({
           ...f,
-          opt_entry_price: data.mark_price_usd.toFixed(4),
+          opt_entry_price: isLocked ? f.opt_entry_price : fmtOptPrice(data.mark_price_usd, data),
           iv: data.mark_iv != null ? String(Math.round(data.mark_iv * 10) / 10) : f.iv,
         }));
       })
@@ -260,30 +374,35 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
 
   async function refreshTicker() {
     preserveRef.current = false;
-    const inst  = buildDeribitInst(form.token, form.expiry, form.options_strike, form.option_type);
-    const token = (form.token || "ETH").toUpperCase();
+    const inst    = buildDeribitInst(form.token, form.expiry, form.options_strike, form.option_type);
+    const token   = (form.token || "ETH").toUpperCase();
+    const futInst = buildFuturesInst(token, form.fut_instrument_type);
     if (!inst || !selectedAcct) return;
     setFetchingTicker(true);
     try {
       const [optRes, futRes] = await Promise.all([
         fetch(`/api/market?account_id=${selectedAcct}&token=${token}&action=ticker&instrument=${encodeURIComponent(inst)}`),
-        fetch(`/api/market?account_id=${selectedAcct}&token=${token}&action=futures&instrument=${encodeURIComponent(buildFuturesInst(token, form.fut_instrument_type))}`),
+        fetch(`/api/market?account_id=${selectedAcct}&token=${token}&action=futures&instrument=${encodeURIComponent(futInst)}`),
       ]);
       const [optData, futData] = await Promise.all([optRes.json(), futRes.json()]);
 
       if (optRes.ok && optData.mark_price_usd != null) {
         setTickerInfo({ ...optData, instrument: inst });
         setOptMidPriceRaw(optData.mid_price_raw ?? optData.mark_price_raw ?? 0);
+        const optLocked = optFillLockedRef.current && optFillLockedInstRef.current === inst;
         setForm(f => ({
           ...f,
-          opt_entry_price: optData.mark_price_usd.toFixed(4),
+          opt_entry_price: optLocked ? f.opt_entry_price : fmtOptPrice(optData.mark_price_usd, optData),
           iv: optData.mark_iv != null ? String(Math.round(optData.mark_iv * 10) / 10) : f.iv,
         }));
       }
 
       if (futRes.ok && futData.mark_price != null) {
         setFutMidPrice(futData.mid_price ?? futData.mark_price ?? 0);
-        setForm(f => ({ ...f, fut_entry_price: String(Math.round(futData.mark_price * 100) / 100) }));
+        const futLocked = futFillLockedRef.current && futFillLockedInstRef.current === futInst;
+        if (!futLocked) {
+          setForm(f => ({ ...f, fut_entry_price: String(Math.round(futData.mark_price * 100) / 100) }));
+        }
       }
     } finally {
       setFetchingTicker(false);
@@ -296,27 +415,168 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
     setEntryLogs(prev => [`[${ts}] ${msg}`, ...prev].slice(0, 50));
   }
 
-  async function triggerFuturesEntry(st) {
-    clearInterval(entryTimerRef.current);
-    setEntryPhase("futures_pending");
-    entryStateRef.current = { ...entryStateRef.current, phase: "futures_pending" };
-    if (!st.futInst || !st.futQty) {
-      addEntryLog("No futures — done.");
-      setEntryPhase("done");
-      entryStateRef.current = { ...entryStateRef.current, phase: "done" };
-      return;
+  // Keeps the futures hedge tracking the option's ACTUAL fill, called every
+  // poll tick. Two things changed versus the original one-shot market order:
+  //
+  //  1. PROPORTIONAL. The hedge targets |futQty| × (option filled ÷ option
+  //     total) rather than going on all at once after a complete fill.
+  //     Previously a partial fill that was stopped or errored placed NO hedge
+  //     at all — the leg was reported "cancelled" and the futures step
+  //     skipped — leaving a filled short option completely naked, which for a
+  //     short call is unbounded risk.
+  //  2. MAKER. Posted at the near touch (bid when buying, ask when selling)
+  //     with post_only, instead of crossing at market. Deribit charges 0%
+  //     maker against 0.05% taker on BTC-PERPETUAL, so a ~1 BTC hedge saves
+  //     roughly $32 an entry, and the spread being a single tick ($0.50)
+  //     keeps the fill odds reasonable. post_only also means Deribit repices
+  //     rather than lets it cross, so it can never silently become a taker.
+  //
+  // Progress is tracked as a FRACTION of each order (filled_amount ÷ amount),
+  // never as an absolute size: "amount" is USD notional for inverse futures
+  // but coin qty for linear ones, and the fraction is unit-free, so the
+  // client never has to replicate that conversion.
+  //
+  // Returns true once the hedge has caught up to the option's fill.
+  async function syncFuturesHedge() {
+    if (hedgeBusyRef.current) return false; // a placement is already in flight
+    hedgeBusyRef.current = true;
+    try {
+      return await syncFuturesHedgeBody();
+    } finally {
+      hedgeBusyRef.current = false;
     }
-    addEntryLog(`Placing futures MARKET ${st.futDir} ${Math.abs(st.futQty)}x ${st.futInst}`);
+  }
+
+  async function syncFuturesHedgeBody() {
+    const st = entryStateRef.current;
+    if (!st.futInst || !st.futQty) return true;
+
+    const totalOpt = Math.abs(st.optQty) || 0;
+    const totalFut = Math.abs(st.futQty);
+    let hedged     = st.futHedged || 0;
+    let weighted   = st.futWeighted || 0;
+
+    const creditFill = (coinQty, price) => {
+      if (!(coinQty > 0)) return;
+      hedged   += coinQty;
+      weighted += coinQty * (parseFloat(price) || 0);
+    };
+
+    // ── Reconcile whatever order is already working ──
+    if (st.futOrderId) {
+      const r = await fetch(`/api/deribit-order?account_id=${st.accountId}&order_id=${st.futOrderId}`);
+      const d = await r.json().catch(() => ({}));
+      const placedCoin = st.futOrderCoin || 0;
+      const frac = parseFloat(d.amount) > 0 ? (parseFloat(d.filled_amount) || 0) / parseFloat(d.amount) : 0;
+
+      if (d.order_state === "filled") {
+        creditFill(placedCoin, d.price);
+        addEntryLog(`Futures hedge filled ${placedCoin} @ ${d.price} (maker)`);
+        entryStateRef.current = { ...entryStateRef.current, futOrderId: null, futOrderCoin: 0, futHedged: hedged, futWeighted: weighted };
+      } else if (d.order_state === "cancelled" || d.order_state === "rejected") {
+        creditFill(placedCoin * frac, d.price);
+        entryStateRef.current = { ...entryStateRef.current, futOrderId: null, futOrderCoin: 0, futHedged: hedged, futWeighted: weighted };
+      } else {
+        // Still resting — re-quote only if the touch has moved away from it,
+        // so a stable book doesn't churn cancel/replace every 2s.
+        const fRes = await fetch(`/api/market?account_id=${st.accountId}&token=${st.token}&action=futures&instrument=${encodeURIComponent(st.futInst)}`);
+        const fD   = await fRes.json().catch(() => ({}));
+        const touch = st.futDir === "buy" ? fD.best_bid : fD.best_ask;
+        if (touch > 0 && st.futOrderPrice > 0 && Math.abs(touch - st.futOrderPrice) > 1e-9) {
+          const cRes = await fetch(`/api/deribit-order?account_id=${st.accountId}&order_id=${st.futOrderId}`, { method: "DELETE" });
+          const cD   = await cRes.json().catch(() => ({}));
+          if (!cRes.ok) return false; // cancel failed — retry next tick rather than risk a duplicate
+          const cFrac = parseFloat(cD.amount) > 0 ? (parseFloat(cD.filled_amount) || 0) / parseFloat(cD.amount) : frac;
+          creditFill(placedCoin * cFrac, cD.price);
+          entryStateRef.current = { ...entryStateRef.current, futOrderId: null, futOrderCoin: 0, futHedged: hedged, futWeighted: weighted };
+        } else {
+          return false; // resting at the right price, just wait
+        }
+      }
+    }
+
+    // ── Place the shortfall, sized to how much of the option actually filled ──
+    const filledOpt = Math.min(Math.max(st.liveFilled || 0, st.filledSoFar || 0), totalOpt);
+    const ratio     = totalOpt > 0 ? filledOpt / totalOpt : 1;
+    const target    = totalFut * ratio;
+    const need      = target - hedged;
+
+    // "Settled" = the option side is finished — either fully filled or
+    // stopped. Until then the target keeps rising as the option fills, so
+    // catching up to it is not completion. Once settled the target is fixed,
+    // and reaching it IS completion; without this distinction a stop after a
+    // partial fill would leave the loop polling forever, since ratio never
+    // reaches 1.
+    const settled = entryStateRef.current.phase === "futures_pending";
+    if (need <= 1e-9) return settled || (ratio >= 1 && hedged >= totalFut - 1e-9);
+    if (entryStateRef.current.cancelled && filledOpt <= 0) return true; // stopped before anything filled — nothing to hedge
+    // A residual too small to be worth an order (and likely under Deribit's
+    // min_trade_amount) shouldn't keep a settled entry open indefinitely.
+    if (settled && need < totalFut * 0.01) {
+      addEntryLog(`Remaining hedge ${need.toFixed(6)} is negligible — finishing.`);
+      return true;
+    }
+
+    const fRes = await fetch(`/api/market?account_id=${st.accountId}&token=${st.token}&action=futures&instrument=${encodeURIComponent(st.futInst)}`);
+    const fD   = await fRes.json().catch(() => ({}));
+    const touch = st.futDir === "buy" ? fD.best_bid : fD.best_ask;
+    if (!(touch > 0)) return false;
+
     const res = await fetch("/api/deribit-order", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ account_id: st.accountId, instrument: st.futInst, qty: Math.abs(st.futQty), direction: st.futDir, is_market: true }),
+      body: JSON.stringify({
+        account_id: st.accountId, instrument: st.futInst, qty: need,
+        direction: st.futDir, price: touch, is_market: false, post_only: true,
+      }),
     });
     const data = await res.json();
-    if (!res.ok) { addEntryLog(`Futures failed: ${data.error}`); setEntryPhase("error"); entryStateRef.current = { ...entryStateRef.current, phase: "error" }; return; }
-    addEntryLog(`Futures filled @ ${data.price ?? "market"}`);
+    if (!res.ok || !data.order_id) {
+      addEntryLog(`Futures hedge order failed: ${data.error} — will retry.`);
+      return false;
+    }
+    addEntryLog(`Hedging ${need.toFixed(6)} (option ${(ratio * 100).toFixed(0)}% filled) — maker ${st.futDir} @ ${touch}`);
+    entryStateRef.current = {
+      ...entryStateRef.current,
+      futOrderId: data.order_id, futOrderPrice: touch, futOrderCoin: need,
+      futHedged: hedged, futWeighted: weighted,
+    };
+    return false;
+  }
+
+  // Writes the hedge's true weighted-average fill price into the form and
+  // settles the entry. Same reason the option side does this: the alert must
+  // report what was actually paid, not a pre-trade estimate.
+  function finishEntry() {
+    const st = entryStateRef.current;
+    clearInterval(entryTimerRef.current);
+    if (st.futHedged > 0 && st.futWeighted > 0) {
+      const avg = st.futWeighted / st.futHedged;
+      futFillLockedRef.current = true;
+      futFillLockedInstRef.current = st.futInst;
+      set("fut_entry_price", String(avg));
+      addEntryLog(`Futures hedge complete — ${st.futHedged.toFixed(6)} @ avg ${avg.toFixed(2)}`);
+    }
     setEntryPhase("done");
     entryStateRef.current = { ...entryStateRef.current, phase: "done" };
+  }
+
+  // Deribit option prices/fills are in raw coin-denominated terms (e.g.
+  // 0.0195 ETH) for coin-margined tokens (BTC/ETH), not USD — form.opt_entry_price
+  // must be USD, so those need converting via the underlying price. Linear
+  // (USDC/USDT-settled) tokens like SOL_USDC/XRP_USDC quote the option premium
+  // directly in USD already — multiplying THOSE by underlying_price (~$74 for
+  // SOL) would inflate a ~$1 premium to ~$74. Mirrors the same isLinear check
+  // already used in /api/market's ticker route for mark_price_usd.
+  async function convertRawOptToUsd(accountId, token, instrument, rawPrice) {
+    const isLinear = /_USDC$|_USDT$/i.test(token);
+    if (isLinear) return rawPrice;
+    try {
+      const r = await fetch(`/api/market?account_id=${accountId}&token=${token}&action=ticker&instrument=${encodeURIComponent(instrument)}`);
+      const d = await r.json();
+      const toUsd = d.underlying_price || (d.mark_price_raw ? d.mark_price_usd / d.mark_price_raw : 1);
+      return rawPrice * toUsd;
+    } catch { return rawPrice; }
   }
 
   async function placeOptionEntry(st, midPrice) {
@@ -353,13 +613,62 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
     addEntryLog(`Order #${data.order_id.slice(-8)} — ${data.order_state}`);
     if (data.order_state === "filled") {
       addEntryLog("Option filled immediately!");
-      entryStateRef.current = { ...entryStateRef.current, filledSoFar: Math.abs(st.optQty) };
-      await triggerFuturesEntry({ ...entryStateRef.current, phase: "futures_pending" });
+      // Weighted-average entry price across every order this leg took to
+      // fill (re-quotes each get their own fill price) — not just the last
+      // one, and not the pre-trade quoted price, which drift apart whenever
+      // a re-quote happens.
+      const totalQty  = Math.abs(st.optQty);
+      const weighted  = (st.fillWeightedSum || 0) + remainingQty * (parseFloat(data.price) || midPrice);
+      const avgPriceUsd = await convertRawOptToUsd(st.accountId, st.token, st.optInst, weighted / totalQty);
+      optFillLockedRef.current = true;
+      optFillLockedInstRef.current = st.optInst;
+      set("opt_entry_price", avgPriceUsd.toFixed(4));
+      entryStateRef.current = { ...entryStateRef.current, filledSoFar: totalQty, fillWeightedSum: weighted };
+      onOptionComplete();
     }
   }
 
-  async function entryPollTick() {
+  // The option side is settled — either fully filled, or stopped after a
+  // partial. Hand over to the hedge loop rather than firing a single
+  // full-size futures order.
+  function onOptionComplete() {
     const st = entryStateRef.current;
+    entryStateRef.current = { ...st, phase: "futures_pending" };
+    setEntryPhase("futures_pending");
+    if (!st.futInst || !st.futQty) {
+      addEntryLog("No futures leg — done.");
+      finishEntry();
+      return;
+    }
+    // Keep polling: the hedge is a maker order that has to be chased until
+    // it fills, so this can't complete synchronously.
+    clearInterval(entryTimerRef.current);
+    entryTimerRef.current = setInterval(entryPollTick, 2000);
+  }
+
+  async function entryPollTick() {
+    if (tickBusyRef.current) return; // previous tick still in flight
+    tickBusyRef.current = true;
+    try {
+      await entryPollTickBody();
+    } finally {
+      tickBusyRef.current = false;
+    }
+  }
+
+  async function entryPollTickBody() {
+    const st = entryStateRef.current;
+    if (st.phase === "done" || st.phase === "error") return;
+
+    // Hedge-only phase — no more option orders, just bring the futures hedge
+    // up to whatever the option actually filled.
+    if (st.phase === "futures_pending") {
+      try {
+        if (await syncFuturesHedge()) finishEntry();
+      } catch (e) { addEntryLog(`Hedge poll error: ${e.message}`); }
+      return;
+    }
+
     if (st.phase !== "option_pending" || !st.orderId || st.cancelled) return;
     try {
       const stRes  = await fetch(`/api/deribit-order?account_id=${st.accountId}&order_id=${st.orderId}`);
@@ -367,12 +676,26 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
       const totalQty  = Math.abs(st.optQty);
       const filledOnThisOrder = parseFloat(stData.filled_amount ?? 0);
       const cumFilled = (st.filledSoFar || 0) + filledOnThisOrder;
+      // filledSoFar only advances when an order is cancelled or completes, so
+      // on its own it misses a partial sitting on the CURRENT resting order.
+      // liveFilled carries the true cumulative fill so the hedge can track it
+      // continuously instead of in jumps.
+      entryStateRef.current = { ...entryStateRef.current, liveFilled: cumFilled };
+      // Hedge alongside the option chase, so exposure is covered as it builds
+      // rather than only at the end.
+      try { await syncFuturesHedge(); } catch (e) { addEntryLog(`Hedge error: ${e.message}`); }
 
       if (stData.order_state === "filled" || cumFilled >= totalQty - 1e-9) {
         addEntryLog("Option filled!");
-        const next = { ...st, filledSoFar: totalQty, phase: "futures_pending" };
-        entryStateRef.current = next;
-        await triggerFuturesEntry(next);
+        // Weighted-average across every order this leg took to fill — see
+        // the same note in placeOptionEntry().
+        const weighted = (st.fillWeightedSum || 0) + filledOnThisOrder * (parseFloat(stData.price) || st.orderMid);
+        const avgPriceUsd = await convertRawOptToUsd(st.accountId, st.token, st.optInst, weighted / totalQty);
+        optFillLockedRef.current = true;
+        optFillLockedInstRef.current = st.optInst;
+        set("opt_entry_price", avgPriceUsd.toFixed(4));
+        entryStateRef.current = { ...st, filledSoFar: totalQty, liveFilled: totalQty, fillWeightedSum: weighted };
+        onOptionComplete();
         return;
       }
       // Check if mid price moved enough to re-place — only for the
@@ -394,15 +717,20 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
           addEntryLog(`Cancel failed (${cancelData.error || cancelRes.status}) — re-checking next tick instead of placing a duplicate order.`);
           return;
         }
-        const cumFilledAtCancel = (st.filledSoFar || 0) + parseFloat(cancelData.filled_amount ?? filledOnThisOrder);
+        const filledByThisOrder  = parseFloat(cancelData.filled_amount ?? filledOnThisOrder);
+        const weightedSoFar      = (st.fillWeightedSum || 0) + filledByThisOrder * (parseFloat(cancelData.price) || st.orderMid);
+        const cumFilledAtCancel  = (st.filledSoFar || 0) + filledByThisOrder;
         if (cumFilledAtCancel >= totalQty - 1e-9) {
           addEntryLog("Option filled during cancel!");
-          const next = { ...st, filledSoFar: totalQty, phase: "futures_pending" };
-          entryStateRef.current = next;
-          await triggerFuturesEntry(next);
+          const avgPriceUsd = await convertRawOptToUsd(st.accountId, st.token, st.optInst, weightedSoFar / totalQty);
+          optFillLockedRef.current = true;
+          optFillLockedInstRef.current = st.optInst;
+          set("opt_entry_price", avgPriceUsd.toFixed(4));
+          entryStateRef.current = { ...st, filledSoFar: totalQty, liveFilled: totalQty, fillWeightedSum: weightedSoFar };
+          onOptionComplete();
           return;
         }
-        entryStateRef.current = { ...st, filledSoFar: cumFilledAtCancel };
+        entryStateRef.current = { ...st, filledSoFar: cumFilledAtCancel, fillWeightedSum: weightedSoFar };
         await placeOptionEntry(entryStateRef.current, newMid);
       } else if (filledOnThisOrder > 0) {
         addEntryLog(`Partially filled ${filledOnThisOrder}/${st.orderQty ?? totalQty} on this order — waiting @ ${st.orderMid.toFixed(5)}`);
@@ -412,7 +740,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
     } catch (e) { addEntryLog(`Poll error: ${e.message}`); }
   }
 
-  function cancelEntryOrder() {
+  async function cancelEntryOrder() {
     // Set FIRST, before anything else — every order-placement point checks
     // this flag fresh (not a stale closure), so it takes effect even if a
     // tick is already mid-flight past its own earlier checks. clearInterval
@@ -420,16 +748,41 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
     entryStateRef.current = { ...entryStateRef.current, cancelled: true };
     clearInterval(entryTimerRef.current);
     const st = entryStateRef.current;
+
+    // Awaited, not fire-and-forget: the cancel response carries the most
+    // accurate filled_amount at the moment of cancellation, and that number
+    // decides how much hedge is still owed. Discarding it would under-hedge.
+    let filled = Math.max(st.liveFilled || 0, st.filledSoFar || 0);
     if (st.orderId && st.accountId) {
-      fetch(`/api/deribit-order?account_id=${st.accountId}&order_id=${st.orderId}`, { method: "DELETE" }).catch(() => {});
+      try {
+        const r = await fetch(`/api/deribit-order?account_id=${st.accountId}&order_id=${st.orderId}`, { method: "DELETE" });
+        const d = await r.json().catch(() => ({}));
+        const onThisOrder = parseFloat(d.filled_amount ?? 0) || 0;
+        filled = Math.max(filled, (st.filledSoFar || 0) + onThisOrder);
+      } catch { /* order may already be gone; fall back to what we tracked */ }
     }
-    addEntryLog("Cancelled by user — no further orders will be placed.");
-    entryStateRef.current = { ...entryStateRef.current, phase: "idle" };
-    setEntryPhase("idle");
+    addEntryLog("Stopped by user — no further option orders will be placed.");
+
+    entryStateRef.current = { ...entryStateRef.current, orderId: null, liveFilled: filled, filledSoFar: filled };
+
+    // Stopping must never strand a filled option unhedged — a naked short
+    // call has unbounded risk. Anything that already filled still gets its
+    // proportional hedge; only a stop before ANY fill ends the entry outright.
+    if (filled > 0 && st.futInst && st.futQty) {
+      addEntryLog(`${filled} option(s) already filled — hedging that portion before finishing.`);
+      onOptionComplete();
+    } else {
+      entryStateRef.current = { ...entryStateRef.current, phase: "idle" };
+      setEntryPhase("idle");
+    }
   }
 
   async function handleExecute() {
     setExecuteError(null); setExecuteResult(null); setEntryLogs([]);
+    optFillLockedRef.current = false;
+    futFillLockedRef.current = false;
+    tickBusyRef.current  = false;
+    hedgeBusyRef.current = false;
     if (!selectedAcct) { setExecuteError("Select an account first."); return; }
     const optQty = parseFloat(form.opt_entry_qty) || 0;
     const futQty = parseFloat(form.fut_qty) || 0;
@@ -477,7 +830,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
         phase: "option_pending", accountId: selectedAcct, token: currency,
         optInst, optQty, optDir: optQty > 0 ? "buy" : "sell",
         futInst, futQty, futDir: futQty > 0 ? "buy" : "sell",
-        orderId: null, orderMid: 0, filledSoFar: 0, cancelled: false,
+        orderId: null, orderMid: 0, filledSoFar: 0, fillWeightedSum: 0, cancelled: false,
       };
 
       await placeOptionEntry(entryStateRef.current, initialMid);
@@ -576,26 +929,37 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
       const effectiveTradeId = tradeIdOverride ?? savedTradeId ?? tradeId ?? null;
       let initialTotalUsd = null;
       let initialUsdcEquityUsd = null;
+      let effectiveMonitorMode = monitorMode;
       if (effectiveTradeId) {
         try {
           const priorData = await fetch(`/api/auto-close?trade_id=${effectiveTradeId}`).then(r => r.json());
+          // != null only — initial_total_usd can legitimately be 0 or
+          // negative under coin-only tracking (a coin-margined wallet can
+          // go negative), so a ">0" filter here would wrongly skip a real,
+          // reusable baseline and silently reset it to a fresh snapshot.
           const withInitial = (priorData.jobs || [])
-            .filter(j => j.initial_total_usd != null && parseFloat(j.initial_total_usd) > 0)
+            .filter(j => j.initial_total_usd != null)
             .sort((a, b) => b.id - a.id)[0];
           if (withInitial) {
             initialTotalUsd = parseFloat(withInitial.initial_total_usd);
             initialUsdcEquityUsd = withInitial.initial_usdc_equity_usd != null ? parseFloat(withInitial.initial_usdc_equity_usd) : null;
+            // Reuse the ORIGINAL job's mode, not whatever the UI currently
+            // shows — the baseline being reused was captured under that
+            // mode, and mixing modes mid-position would be meaningless.
+            if (withInitial.monitor_mode) effectiveMonitorMode = withInitial.monitor_mode;
           }
         } catch { /* fall through to a fresh snapshot below */ }
       }
       if (initialTotalUsd == null) {
         const bal = await fetch(`/api/balance?account_id=${selectedAcct}&mode=collateral&token=${token}`).then(r => r.json());
         if (bal.error) throw new Error(bal.error);
-        // PnL/target tracking is coin-equity ONLY for coin-margined tokens
-        // (BTC/ETH) — the USDC side (futures hedge collateral) is excluded
-        // from the trigger decision, only kept for reference in the alert.
+        // PnL/target tracking is coin-equity for coin-margined tokens
+        // (BTC/ETH) unless the user picked "Combined" — the USDC side
+        // (futures hedge collateral) is then excluded from the trigger
+        // decision, only kept for reference in the alert.
         const isCoinMargined = bal.coin_symbol !== "USDC";
-        initialTotalUsd = isCoinMargined ? (bal.coin_equity_usd ?? 0) : (bal.total_usd ?? 0);
+        const useCoinOnly = isCoinMargined && effectiveMonitorMode !== "combined";
+        initialTotalUsd = useCoinOnly ? (bal.coin_equity_usd ?? 0) : (bal.total_usd ?? 0);
         initialUsdcEquityUsd = isCoinMargined ? (bal.usdc_equity ?? 0) : null;
       }
 
@@ -616,6 +980,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
           fut_entry_price:   form.fut_entry_price || null,
           initial_total_usd: initialTotalUsd,
           initial_usdc_equity_usd: initialUsdcEquityUsd,
+          monitor_mode:      effectiveMonitorMode,
           target_pnl:        tPnl,
         }),
       });
@@ -724,6 +1089,11 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
     const today = new Date(); today.setUTCHours(0, 0, 0, 0);
     return new Date(form.expiry + "T00:00:00Z") < today;
   })());
+
+  // Coin-margined (BTC/ETH) vs pure-USDC-margined (SOL_USDC, XRP_USDC, ...)
+  // — the coin/combined monitor-mode choice only means something for the
+  // former; the latter has no separate coin wallet to track.
+  const isCoinMarginedToken = !!(form.token && !/_USDC$|_USDT$/i.test(form.token));
 
   // ── Black-Scholes ─────────────────────────────────────────
   const K_bs       = strikeNumber(form.options_strike);
@@ -1031,6 +1401,20 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
                 className="w-28 rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:border-brand focus:outline-none"
               />
             </div>
+            {isCoinMarginedToken && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-500">Monitor</label>
+                <select
+                  value={monitorMode}
+                  onChange={e => setMonitorMode(e.target.value)}
+                  title="Coin Equity Only: ignores the USDC/futures-hedge side entirely. Combined: sums coin + USDC equity, like the original behavior."
+                  className="rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:border-brand focus:outline-none"
+                >
+                  <option value="coin">Coin Equity Only</option>
+                  <option value="combined">Combined (Coin + USDC)</option>
+                </select>
+              </div>
+            )}
             <button
               type="button"
               onClick={handleExecute}
@@ -1048,6 +1432,15 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
               className="rounded-lg bg-orange-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50 transition-colors"
             >
               {executing ? "Executing…" : acStarting ? "Starting Monitor…" : "⚡ Execute + Auto-Close"}
+            </button>
+            <button
+              type="button"
+              onClick={openExitModal}
+              disabled={!selectedAcct || !form.token}
+              title="Fetch every live option and futures position Deribit has open for this coin on this account, and close them all after confirming"
+              className="rounded-lg border-2 border-red-600 bg-white px-6 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50 transition-colors"
+            >
+              ✕ Exit All {form.token ? form.token.toUpperCase() : ""} Positions
             </button>
           </div>
           {acError && <Alert type="error">{acError}</Alert>}
@@ -1337,6 +1730,37 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
           </div>
         </div>
       </div>
+
+      {exitModalOpen && (
+        <ExitAllModal
+          token={form.token}
+          trades={[{
+            token: form.token, expiry: form.expiry, options_strike: form.options_strike, option_type: form.option_type,
+            opt_entry_price: form.opt_entry_price, fut_entry_price: form.fut_entry_price,
+            initial_collateral_usd: acJob?.initial_total_usd ?? form.initial_collateral_usd ?? null,
+          }]}
+          loading={exitLoading}
+          error={exitError}
+          positions={exitPositions}
+          confirming={exitConfirming}
+          job={exitJob}
+          collateralBefore={exitCollateralBefore}
+          fetchedAt={exitFetchedAt}
+          badIp={exitBadIp}
+          crossAfter={exitCrossAfter}
+          crossAfterUnit={exitCrossAfterUnit}
+          onCrossAfterChange={setExitCrossAfter}
+          onCrossAfterUnitChange={setExitCrossAfterUnit}
+          onConfirm={confirmExitAll}
+          onRefresh={openExitModal}
+          onClose={() => {
+            setExitModalOpen(false);
+            setExitCollateralBefore(null);
+            setExitFetchedAt(null);
+            setExitBadIp(false);
+          }}
+        />
+      )}
     </div>
   );
 }

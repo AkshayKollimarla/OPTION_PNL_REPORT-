@@ -2,11 +2,13 @@
 
 import { useState, useEffect, useCallback } from "react";
 
-// Builds Deribit-style instrument name: ETH-25OCT24-1700-P
+// Builds Deribit-style instrument name: ETH-25OCT24-1700-P. Deribit does NOT
+// zero-pad single-digit days (BTC-1AUG26-..., not BTC-01AUG26-...) — padding
+// here builds a name Deribit doesn't recognize.
 function buildName(token, expiryDate, strike, optType) {
   const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
   const d   = new Date(expiryDate + "T00:00:00Z");
-  const day = String(d.getUTCDate()).padStart(2, "0");
+  const day = String(d.getUTCDate());
   const mon = MONTHS[d.getUTCMonth()];
   const yr  = String(d.getUTCFullYear()).slice(-2);
   const t   = optType.toUpperCase() === "CALL" ? "C" : "P";

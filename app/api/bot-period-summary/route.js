@@ -18,11 +18,13 @@ export async function GET(request) {
   try {
     // Always return all accounts (not date-restricted)
     const [accountRows] = await pool.query(
-      `SELECT DISTINCT token_name, MAX(token_symbol) AS token_symbol
+      // Accounts come from `account`; token_name is the instrument on
+       // Hyperliquid rows and would split one account into several.
+       `SELECT account AS token_name, MAX(token_symbol) AS token_symbol
        FROM bot_entries
-       WHERE token_name IS NOT NULL
-       GROUP BY token_name
-       ORDER BY token_name`
+       WHERE account IS NOT NULL AND account != ''
+       GROUP BY account
+       ORDER BY account`
     );
 
     if (!dateFrom || !dateTo) {
@@ -36,7 +38,7 @@ export async function GET(request) {
     const params = [dateFrom, dateTo];
 
     if (account && account !== "all") {
-      conditions.push("token_name = ?");
+      conditions.push("account = ?");
       params.push(account);
     }
 

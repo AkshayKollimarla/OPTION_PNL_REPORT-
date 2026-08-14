@@ -14,10 +14,15 @@ const NUMERIC_KEYS = new Set(
 // Returns the most recent matching entry plus a recent list.
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
-  const symbol  = searchParams.get("symbol");
-  const account = searchParams.get("account");
+  const symbol   = searchParams.get("symbol");
+  const account  = searchParams.get("account");
+  const exchange = searchParams.get("exchange");
   const from    = searchParams.get("from");
   const to      = searchParams.get("to");
+  // Caller-controlled so the log page can widen its window. The old hard 50
+  // silently hid anything older than the 50 newest rows, which made a
+  // correctly-saved entry look lost the moment 50 newer ones existed.
+  const limit   = Math.min(1000, Math.max(1, parseInt(searchParams.get("limit") || "200", 10) || 200));
 
   const where = [];
   const params = [];
@@ -26,8 +31,12 @@ export async function GET(request) {
     params.push(symbol);
   }
   if (account) {
-    where.push("token_name = ?");
+    where.push("account = ?");
     params.push(account);
+  }
+  if (exchange) {
+    where.push("exchange = ?");
+    params.push(exchange);
   }
   if (from) {
     where.push("entry_datetime >= ?");
@@ -41,21 +50,34 @@ export async function GET(request) {
 
   try {
     const [rows] = await pool.query(
-      `SELECT * FROM bot_entries ${whereSql} ORDER BY entry_datetime DESC, id DESC LIMIT 50`,
-      params
+      // limit+1 so the caller can tell a full page from a truncated one.
+      `SELECT * FROM bot_entries ${whereSql} ORDER BY entry_datetime DESC, id DESC LIMIT ?`,
+      [...params, limit + 1]
     );
+    const truncated = rows.length > limit;
+    if (truncated) rows.length = limit;
     const [symbolRows] = await pool.query(
-      `SELECT DISTINCT token_symbol FROM bot_entries WHERE token_symbol IS NOT NULL AND token_symbol != '' ORDER BY token_symbol`
+      `SELECT DISTINCT token_symbol, exchange FROM bot_entries WHERE token_symbol IS NOT NULL AND token_symbol != '' ORDER BY exchange, token_symbol`
     );
     const [accountRows] = await pool.query(
-      `SELECT DISTINCT token_name FROM bot_entries WHERE token_name IS NOT NULL AND token_name != '' ORDER BY token_name`
+      `SELECT DISTINCT account, exchange FROM bot_entries WHERE account IS NOT NULL AND account != '' ORDER BY exchange, account`
+    );
+    const [exchangeRows] = await pool.query(
+      `SELECT DISTINCT exchange FROM bot_entries WHERE exchange IS NOT NULL AND exchange != '' ORDER BY exchange`
     );
     const remapped = rows.map(recomputeNetPnl);
     return NextResponse.json({
       latest: remapped[0] || null,
       entries: remapped,
       symbols: symbolRows.map((r) => r.token_symbol),
-      accounts: accountRows.map((r) => r.token_name),
+      // symbol -> exchange, so the Symbol dropdown can narrow with Exchange
+      symbolExchange: Object.fromEntries(symbolRows.map((r) => [r.token_symbol, r.exchange])),
+      accounts: accountRows.map((r) => r.account),
+      // account -> exchange, so the UI can group without a second round trip
+      accountExchange: Object.fromEntries(accountRows.map((r) => [r.account, r.exchange])),
+      exchanges: exchangeRows.map((r) => r.exchange),
+      truncated,
+      limit,
     });
   } catch (err) {
     return NextResponse.json(

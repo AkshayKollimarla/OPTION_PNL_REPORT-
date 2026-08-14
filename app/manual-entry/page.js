@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   HEADER_FIELDS,
+  EXCHANGE_BY_ACCOUNT,
   METRIC_CARDS,
   BOT_DETAILS_LEFT,
   BOT_DETAILS_RIGHT,
@@ -91,6 +92,13 @@ function ManualEntryInner() {
   const update = useCallback((key, val) => {
     setForm((prev) => {
       const next = { ...prev, [key]: val };
+      // Typing a known account fills in its exchange. Only fills a BLANK
+      // field, never overwrites — the stored value is the source of truth and
+      // an account that moves venue must stay editable by hand.
+      if (key === "token_name" && !prev.exchange) {
+        const ex = EXCHANGE_BY_ACCOUNT[String(val).trim().toUpperCase()];
+        if (ex) next.exchange = ex;
+      }
       return applyFormulas(next, overrides);
     });
   }, [overrides]);

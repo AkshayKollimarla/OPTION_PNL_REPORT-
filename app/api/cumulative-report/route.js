@@ -22,12 +22,12 @@ export async function GET(request) {
 
   if (account) {
     // Exact account match — symbol filter is redundant when account is set
-    conditions.push("token_name = ?");
+    conditions.push("account = ?");
     params.push(account);
   } else if (symbol) {
     // No account specified: match all accounts whose name starts with the symbol
     // e.g. "ETH" matches "ETH-HIDDEN", "ETH-HFT1", etc.
-    conditions.push("token_name LIKE ?");
+    conditions.push("account LIKE ?");
     params.push(`${symbol}%`);
   }
 
@@ -36,7 +36,7 @@ export async function GET(request) {
   try {
     const [rows] = await pool.query(`
       SELECT
-        token_name,
+        account AS token_name,
         MAX(token_symbol)                        AS token_symbol,
         SUM(COALESCE(rtps, 0))                   AS rtps,
         AVG(COALESCE(per_hour_rtps, 0))          AS per_hour_rtps,
@@ -50,7 +50,7 @@ export async function GET(request) {
         COUNT(DISTINCT DATE(entry_datetime))     AS active_days
       FROM bot_entries
       ${where}
-      GROUP BY token_name
+      GROUP BY account
       ORDER BY net_pnl DESC
     `, params);
 

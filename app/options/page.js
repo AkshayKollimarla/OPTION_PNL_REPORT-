@@ -87,6 +87,17 @@ export default function OptionsDashboard() {
   const closed    = trades.filter((t) => t.status === "closed").length;
   const bookedPnl = trades.filter((t) => t.status === "closed")
     .reduce((s, t) => s + Number(t.net_booked_pnl || 0), 0);
+  // Every leg on the page, open and closed. For an open leg this is the decay
+  // still running; for a closed one it is the daily theta that leg carried
+  // while it was on. Both are worth seeing — a closed structure showing blank
+  // hid the figure entirely once its legs were marked closed.
+  const netTheta  = trades.reduce((s, t) => s + Number(t.per_day_theta_gain_loss || 0), 0);
+  const netThetaOpen = trades.filter((t) => t.status === "open")
+    .reduce((s, t) => s + Number(t.per_day_theta_gain_loss || 0), 0);
+  // Total theta is the whole-life figure (daily x days to expiry), so it is
+  // NOT the daily number scaled by anything on screen — it is summed in its
+  // own right.
+  const netThetaTotal = trades.reduce((s, t) => s + Number(t.total_theta_gain_loss || 0), 0);
 
   // Memoised render units — only recomputes when trades array reference changes
   const renderUnits = useMemo(() => {
@@ -106,7 +117,7 @@ export default function OptionsDashboard() {
     return units;
   }, [trades]);
 
-  const COL_COUNT = 14;
+  const COL_COUNT = 16;
 
   function clearFilters() {
     setSearch(""); setDateFrom(""); setDateTo(""); setFilter("all");
@@ -128,11 +139,18 @@ export default function OptionsDashboard() {
         {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
         {/* Stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
           <StatCard label="Total (this page)" value={`${trades.length} / ${total}`} color="blue" />
           <StatCard label="Open (page)"        value={open}                          color="green" />
           <StatCard label="Closed (page)"      value={closed}                        color="slate" />
           <StatCard label="Booked PnL (page)"  value={fmtCcy(bookedPnl)}            color={bookedPnl >= 0 ? "green" : "red"} />
+          <StatCard
+            label="Net Theta / Day (page)"
+            value={fmtCcy(netTheta)}
+            color={netTheta >= 0 ? "green" : "red"}
+            sub={netThetaOpen !== netTheta ? `${fmtCcy(netThetaOpen)} from open legs` : null}
+          />
+          <StatCard label="Total Theta (page)" value={fmtCcy(netThetaTotal)} color={netThetaTotal >= 0 ? "green" : "red"} />
         </div>
 
         {/* ── Filters row ── */}
@@ -193,7 +211,7 @@ export default function OptionsDashboard() {
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50 text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                  {["#","Date","Token","Account","Type","Strike","Expiry","Days","Status","Investment","MM PL","Booked PnL","APY","Actions"].map((h) => (
+                  {["#","Date","Token","Account","Type","Strike","Entry Price","Opt Qty","Fut Qty","Distance","Expiry","Days","Status","MM PL","Booked PnL","Actions"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -202,6 +220,16 @@ export default function OptionsDashboard() {
                 {renderUnits.map((unit) => {
                   if (unit.type === "combined") {
                     const combinedPnl = unit.members.reduce((s, m) => s + Number(m.net_booked_pnl || 0), 0);
+                    // Net of the whole structure: long legs pay theta, short
+                    // legs collect it, so the legs offset and only the total
+                    // says what the position actually earns or costs per day.
+                    // Closed legs are included — filtering them out made a
+                    // fully-closed structure show no theta at all, hiding what
+                    // it had been carrying.
+                    const combinedTheta = unit.members
+                      .reduce((s, m) => s + Number(m.per_day_theta_gain_loss || 0), 0);
+                    const combinedThetaTotal = unit.members
+                      .reduce((s, m) => s + Number(m.total_theta_gain_loss || 0), 0);
                     const perLegInv   = Number(unit.members[0]?.investment || 0);
                     const combinedApy = perLegInv ? (combinedPnl / (perLegInv * unit.members.length)) * 365 * 100 : null;
 
@@ -223,17 +251,34 @@ export default function OptionsDashboard() {
                                   Combined PnL: {fmtCcy(combinedPnl)}
                                 </span>
                               )}
+                              {combinedTheta !== 0 && (
+                                <span className={`text-xs font-semibold ${combinedTheta >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                                  Net Theta/Day: {fmtCcy(combinedTheta)}
+                                </span>
+                              )}
+                              {combinedThetaTotal !== 0 && (
+                                <span className={`text-xs font-semibold ${combinedThetaTotal >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                                  Total Theta: {fmtCcy(combinedThetaTotal)}
+                                </span>
+                              )}
                               {combinedApy != null && combinedApy !== 0 && (
                                 <span className="text-xs font-semibold text-purple-600">APY: {combinedApy.toFixed(2)}%</span>
                               )}
                             </div>
                           </td>
                         </tr>
-                        {unit.members.map((t) => (
-                          <TradeRow key={t.id} t={t} combined groupId={unit.group_id} acctMap={acctMap}
-                            confirmId={confirmId} deletingId={deletingId}
-                            onConfirm={setConfirmId} onDelete={handleDelete} onCancel={() => setConfirmId(null)} />
-                        ))}
+                        {/* CALL legs grouped above PUT legs. Display only —
+                            a copy is sorted so unit.members keeps its stored
+                            order, which the totals above and the leg numbering
+                            elsewhere still rely on. The sort is stable, so
+                            legs keep their relative order within each group. */}
+                        {[...unit.members]
+                          .sort((a, b) => (a.option_type === "CALL" ? 0 : 1) - (b.option_type === "CALL" ? 0 : 1))
+                          .map((t) => (
+                            <TradeRow key={t.id} t={t} combined groupId={unit.group_id} acctMap={acctMap}
+                              confirmId={confirmId} deletingId={deletingId}
+                              onConfirm={setConfirmId} onDelete={handleDelete} onCancel={() => setConfirmId(null)} />
+                          ))}
                       </Fragment>
                     );
                   }
@@ -318,6 +363,31 @@ function TradeRow({ t, combined, groupId, acctMap, confirmId, deletingId, onConf
         </span>
       </td>
       <td className="px-4 py-3 text-slate-700">{t.options_strike || "—"}</td>
+      <td className="px-4 py-3 whitespace-nowrap">
+        {/* Option premium paid/received, with the futures hedge entry beneath
+            it — a leg's entry is both, and 2dp would flatten a sub-dollar
+            option premium (0.6 vs 0.65), so this keeps more precision than
+            the money columns. */}
+        <div className="text-slate-700">{fmtPrice(t.opt_entry_price)}</div>
+        {t.fut_entry_price != null && t.fut_entry_price !== "" && (
+          <div className="text-xs text-slate-400 mt-0.5">fut {fmtPrice(t.fut_entry_price)}</div>
+        )}
+      </td>
+      <td className="px-4 py-3 text-slate-700 whitespace-nowrap">{fmtQty(t.opt_entry_qty)}</td>
+      <td className="px-4 py-3 text-slate-700 whitespace-nowrap">{fmtQty(t.fut_qty)}</td>
+      <td className="px-4 py-3 whitespace-nowrap text-xs">
+        {/* Up and down in one column — they're a pair, and two columns of
+            mostly-identical numbers would cost width without adding meaning. */}
+        {t.upside_distance == null && t.down_distance == null ? (
+          <span className="text-slate-400">—</span>
+        ) : (
+          <>
+            <span className="text-emerald-600">↑{fmtQty(t.upside_distance)}</span>
+            <span className="text-slate-300 mx-1">/</span>
+            <span className="text-red-600">↓{fmtQty(t.down_distance)}</span>
+          </>
+        )}
+      </td>
       <td className="px-4 py-3 whitespace-nowrap text-slate-700">{fmtDate(t.expiry)}</td>
       <td className="px-4 py-3 text-slate-700">{t.days_to_expiry ?? "—"}</td>
       <td className="px-4 py-3">
@@ -325,14 +395,12 @@ function TradeRow({ t, combined, groupId, acctMap, confirmId, deletingId, onConf
           {t.status}
         </span>
       </td>
-      <td className="px-4 py-3 text-slate-700">{fmtCcy(t.investment)}</td>
       <td className={`px-4 py-3 font-semibold ${Number(t.market_making_pl) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
         {fmtCcy(t.market_making_pl)}
       </td>
       <td className={`px-4 py-3 font-semibold ${Number(t.net_booked_pnl) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
         {t.net_booked_pnl != null ? fmtCcy(t.net_booked_pnl) : "—"}
       </td>
-      <td className="px-4 py-3 font-semibold text-purple-600">{t.apy != null ? `${Number(t.apy).toFixed(2)}%` : "—"}</td>
       <td className="px-4 py-3">
         <div className="flex items-center gap-2">
           {combined && groupId ? (
@@ -375,14 +443,31 @@ function TradeRow({ t, combined, groupId, acctMap, confirmId, deletingId, onConf
 
 /* ── Helpers ───────────────────────────────────────────── */
 
-function StatCard({ label, value, color }) {
+function StatCard({ label, value, color, sub }) {
   const cls = { blue:"text-blue-600", green:"text-emerald-600", red:"text-red-600", slate:"text-slate-600" }[color] || "text-slate-700";
   return (
     <div className="rounded-xl border border-slate-100 bg-white p-4 shadow-card">
       <p className="text-xs font-medium text-slate-500 mb-1">{label}</p>
       <p className={`text-xl font-bold ${cls}`}>{value}</p>
+      {sub && <p className="text-[11px] text-slate-400 mt-0.5">{sub}</p>}
     </div>
   );
+}
+
+// Quantities are signed — negative means short — and that sign is the whole
+// direction of the leg, so it must never be dropped or rounded away.
+function fmtQty(v) {
+  const n = Number(v);
+  if (isNaN(n) || v === null || v === undefined || v === "") return "—";
+  return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+// Prices need more precision than money totals: an option premium is often
+// well under $1, where 2dp collapses meaningfully different fills together.
+function fmtPrice(v) {
+  const n = Number(v);
+  if (isNaN(n) || v === null || v === undefined || v === "") return "—";
+  return `$${n.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
 }
 
 function fmtCcy(v) {

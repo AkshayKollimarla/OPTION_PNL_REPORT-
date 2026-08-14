@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import pool from "@/lib/options-db.js";
 import { ensureComboTables, startComboWorker } from "@/lib/auto-close-combo-worker.js";
+import { auth, cancelCloseOrders } from "@/lib/deribit-close-helpers.js";
 import { sendTelegramAlert } from "@/lib/telegram.js";
 
 // GET   /api/auto-close-combo?group_id=X   → list combo jobs (optionally filtered)
@@ -34,7 +35,7 @@ export async function GET(req) {
     const where = groupId ? "WHERE group_id = ?" : "";
     const args  = groupId ? [groupId] : [];
     const [rows] = await pool.query(
-      `SELECT id, group_id, account_id, token, initial_total_usd, initial_usdc_equity_usd, final_equity_usd,
+      `SELECT id, group_id, account_id, token, initial_total_usd, initial_usdc_equity_usd, monitor_mode, final_equity_usd,
               target_pnl, target_total_usd, status, last_equity_usd, last_checked_at,
               created_at, triggered_at, completed_at, error_msg
          FROM auto_close_combo_jobs ${where}
@@ -59,7 +60,7 @@ export async function POST(req) {
     const body = await req.json();
     const {
       group_id, account_id, token,
-      initial_total_usd, initial_usdc_equity_usd = null, target_pnl,
+      initial_total_usd, initial_usdc_equity_usd = null, monitor_mode = "coin", target_pnl,
       legs,
     } = body;
 
@@ -92,11 +93,12 @@ export async function POST(req) {
 
     const [result] = await pool.query(
       `INSERT INTO auto_close_combo_jobs
-         (group_id, account_id, token, initial_total_usd, initial_usdc_equity_usd, target_pnl, target_total_usd)
-       VALUES (?,?,?,?,?,?,?)`,
+         (group_id, account_id, token, initial_total_usd, initial_usdc_equity_usd, monitor_mode, target_pnl, target_total_usd)
+       VALUES (?,?,?,?,?,?,?,?)`,
       [
         group_id || null, account_id, token, parseFloat(initial_total_usd),
         initial_usdc_equity_usd != null ? parseFloat(initial_usdc_equity_usd) : null,
+        monitor_mode === "combined" ? "combined" : "coin",
         parseFloat(target_pnl), target_total_usd,
       ]
     );
@@ -126,10 +128,12 @@ export async function POST(req) {
       return bits.join(" · ");
     });
 
-    // initial_total_usd is the coin-only baseline for coin-margined tokens
-    // (BTC/ETH) — PnL/target tracking is coin-equity only. USDC equity is
-    // shown here purely for reference, never used in the trigger math.
-    const isCoinMargined = initial_usdc_equity_usd != null;
+    // initial_total_usd is the coin-only baseline when monitor_mode='coin'
+    // for a coin-margined token — PnL/target tracking is coin-equity only.
+    // USDC equity is shown here purely for reference, never used in the
+    // trigger math. In 'combined' mode initial_total_usd is the whole
+    // account, same as the original pre-coin-tracking behavior.
+    const useCoinOnly = initial_usdc_equity_usd != null && monitor_mode !== "combined";
     const alertResult = await sendTelegramAlert(
       [
         `🟢 <b>Combo Auto-Close Monitor Started</b> — Job #${jobId}`,
@@ -137,11 +141,11 @@ export async function POST(req) {
         ``,
         ...legSummary,
         ``,
-        isCoinMargined
+        useCoinOnly
           ? `Initial ${token} collateral: $${parseFloat(initial_total_usd).toFixed(2)}`
           : `Initial collateral: $${parseFloat(initial_total_usd).toFixed(2)}`,
-        isCoinMargined ? `Initial USDC collateral: $${parseFloat(initial_usdc_equity_usd).toFixed(2)} (reference only)` : null,
-        `Target: +$${parseFloat(target_pnl).toFixed(2)} → closes at $${target_total_usd.toFixed(2)}${isCoinMargined ? ` ${token} equity` : ""}`,
+        useCoinOnly ? `Initial USDC collateral: $${parseFloat(initial_usdc_equity_usd).toFixed(2)} (reference only)` : null,
+        `Target: +$${parseFloat(target_pnl).toFixed(2)} → closes at $${target_total_usd.toFixed(2)}${useCoinOnly ? ` ${token} equity` : " (combined coin+USDC)"}`,
       ].filter(Boolean).join("\n")
     );
 
@@ -205,16 +209,52 @@ export async function DELETE(req) {
     const id = searchParams.get("id");
     if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
-    const [[job]] = await pool.query(`SELECT status FROM auto_close_combo_jobs WHERE id=?`, [id]);
+    const [[job]] = await pool.query(`SELECT status, account_id FROM auto_close_combo_jobs WHERE id=?`, [id]);
     if (!job) return NextResponse.json({ error: "not found" }, { status: 404 });
     if (["completed", "failed", "stopped"].includes(job.status)) {
       return NextResponse.json({ error: `Job already ${job.status}` }, { status: 400 });
     }
 
+    // Mark stopped FIRST so the polling loop can't place anything new while
+    // the cancels below are in flight, then pull this job's orders off the
+    // book. Stopping used to leave them resting: no longer re-quoted as the
+    // mark moved, but still live and able to fill unattended.
     await pool.query(
       `UPDATE auto_close_combo_jobs SET status='stopped', completed_at=NOW() WHERE id=?`, [id]
     );
-    return NextResponse.json({ ok: true });
+
+    let cancelled = 0;
+    try {
+      const [legs] = await pool.query(
+        `SELECT opt_instrument, opt_dir FROM auto_close_combo_legs WHERE combo_job_id=?`, [id]
+      );
+      const { base, token } = await auth(job.account_id);
+      // Cancel by instrument+direction rather than by the stored order id:
+      // an order whose id was never persisted (process restart mid-place, or
+      // a failed write) would otherwise be missed by exactly the cleanup that
+      // exists to catch it.
+      const seen = new Set();
+      for (const leg of legs) {
+        if (!leg.opt_instrument) continue;
+        const key = `${leg.opt_instrument}:${leg.opt_dir}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        cancelled += await cancelCloseOrders(base, token, leg.opt_instrument, leg.opt_dir);
+      }
+      if (cancelled) {
+        const ts = new Date().toISOString().replace("T", " ").slice(0, 19);
+        await pool.query(
+          `UPDATE auto_close_combo_jobs SET log_json=JSON_ARRAY_APPEND(COALESCE(log_json,'[]'),'$',?) WHERE id=?`,
+          [`[${ts}] Stopped by user — cancelled ${cancelled} resting close order(s).`, id]
+        ).catch(() => {});
+      }
+    } catch (e) {
+      // The job is already stopped, which is the safety-critical part. Report
+      // the cleanup failure so any leftover order can be cancelled by hand
+      // rather than silently swallowing it.
+      return NextResponse.json({ ok: true, cancelled, warning: `Job stopped, but cancelling its open orders failed: ${e.message}. Check Deribit for resting orders.` });
+    }
+    return NextResponse.json({ ok: true, cancelled });
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }

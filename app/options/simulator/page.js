@@ -52,13 +52,31 @@ const LEG_STYLES = {
 
 const n = (v) => Number(v) || 0;
 
+// Show an option premium at the precision the instrument actually trades at.
+// Deribit prices sit on a per-instrument tick grid — SOL_USDC options tick at
+// 0.1, so a mark of 1.5488 is displayed as 1.5, not 1.5488, because no order
+// can exist at the latter. Only applies to linear (USDC/USDT) instruments,
+// where the quote currency is USD; on coin-margined options the tick governs
+// the coin-denominated premium and says nothing about the converted USD
+// figure, so those keep the generic 4dp.
+function fmtOptPrice(value, ticker) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "";
+  if (ticker?.is_linear && ticker?.tick_size > 0) {
+    return n.toFixed(Math.max(0, -Math.floor(Math.log10(ticker.tick_size))));
+  }
+  return n.toFixed(4);
+}
+
 // Build Deribit instrument name from parts
 function buildDeribitInst(token, expiry, strike, optType) {
   if (!token || !expiry || !strike) return null;
   const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
   const d = new Date(expiry + "T00:00:00Z");
   if (isNaN(d)) return null;
-  const day = String(d.getUTCDate()).padStart(2, "0");
+  // Deribit does NOT zero-pad single-digit days (BTC-1AUG26-..., not
+  // BTC-01AUG26-...) — padding here builds a name Deribit doesn't recognize.
+  const day = String(d.getUTCDate());
   const mon = MONTHS[d.getUTCMonth()];
   const yr  = String(d.getUTCFullYear()).slice(-2);
   return `${token.toUpperCase()}-${day}${mon}${yr}-${strike}-${optType === "CALL" ? "C" : "P"}`;
@@ -158,6 +176,11 @@ function SimulatorInner() {
 
   // Combo auto-close (server-side job spanning all legs, combined equity trigger)
   const [comboTargetPnl,        setComboTargetPnl]        = useState("");
+  // 'coin' — track only the group's own coin equity (BTC/ETH), ignoring the
+  // USDC/futures-hedge side entirely. 'combined' — whole account (coin +
+  // USDC summed), the original behavior. Only meaningful for coin-margined
+  // tokens. See app/options/add/page.js for the incident behind the default.
+  const [comboMonitorMode,      setComboMonitorMode]      = useState("coin");
   const [comboAcJob,            setComboAcJob]            = useState(null); // { job, legs }
   const [comboAcStarting,       setComboAcStarting]       = useState(false);
   const [comboAcError,          setComboAcError]          = useState(null);
@@ -262,7 +285,17 @@ function SimulatorInner() {
   useEffect(() => { return () => clearInterval(comboAcTimerRef.current); }, []);
 
   /* ── Leg helpers ──────────────────────────────────── */
-  function addLeg() { setLegs((prev) => [...prev, makeLeg("CALL LONG")]); }
+  // A new leg starts out following the first card's distances, same as any
+  // other non-overridden leg — otherwise it would be the one card sitting at
+  // blank while the rest share a value.
+  function addLeg() {
+    setLegs((prev) => {
+      const leg    = makeLeg("CALL LONG");
+      const master = prev[masterLegIdx];
+      if (master) for (const k of SYNCED_KEYS) leg.form[k] = syncedValueFor(k, master.form[k] ?? "", leg.type);
+      return [...prev, leg];
+    });
+  }
 
   function removeLeg(idx) {
     if (legs.length <= 2) return;
@@ -276,10 +309,80 @@ function SimulatorInner() {
     ));
   }
 
+  // Distances are almost always the same across every leg of one structure,
+  // so the first card acts as the source and the rest follow it. A leg that
+  // gets its own value edited directly is flagged as overridden and stops
+  // following, so a deliberate per-leg number is never silently overwritten
+  // by a later edit to the first card.
+  //
+  // "First card" is legDisplayOrder[0] — the card actually at the top of the
+  // screen — not legs[0]. Cards are displayed CALLs-first, so those differ
+  // whenever leg 1 is a PUT, and following the array order would make edits
+  // propagate from a card in the middle of the page.
+  // entry_date and expiry are properties of the STRUCTURE, not of any one
+  // leg — every leg of a combined strategy is opened the same day against the
+  // same expiry — so they follow the first card too. Both copy verbatim; only
+  // opt_entry_qty needs a per-leg transform (see syncedValueFor).
+  // Every leg of one structure normally shares the same coin, entry date and
+  // expiry — only strike and direction differ — so the first card drives those
+  // too. After a token lands on the other legs, each card's own chain effect
+  // reloads its expiry list; since they all now hold the same token they
+  // settle on the same chain.
+  // status and end_date sync too: legs of one structure are opened and closed
+  // together, so marking the first card closed on a given date should carry
+  // across rather than leaving the rest showing open.
+  const SYNCED_KEYS  = ["upside_distance", "down_distance", "opt_entry_qty", "entry_date", "expiry", "token", "status", "end_date", "fut_entry_price"];
+  // Changing either of these invalidates a strike picked under the old chain —
+  // a strike listed for one expiry often doesn't exist in another, and would
+  // otherwise build an instrument name Deribit rejects. The first card already
+  // clears its own strike on these edits; followers must do the same.
+  const STRIKE_INVALIDATING = ["expiry", "token"];
+  const masterLegIdx = legDisplayOrder[0];
+
+  // Quantity propagates by MAGNITUDE, with each leg supplying its own sign:
+  // this app encodes direction in the sign of opt_entry_qty (short = negative,
+  // as applyLegType already enforces on a type change). Copying the raw value
+  // across would turn every leg into the same direction as the first card and
+  // silently invert half the structure. So 1000 on a long card becomes -1000
+  // on the short legs. Distances carry no direction and copy verbatim.
+  function syncedValueFor(key, value, legType) {
+    if (key !== "opt_entry_qty") return value;
+    if (value === "" || value == null) return value;
+    const n = Math.abs(Number(value));
+    if (!Number.isFinite(n)) return value;
+    return String((legType || "").endsWith("SHORT") ? -n : n);
+  }
+
   function setLegField(idx, key, value) {
-    setLegs((prev) => prev.map((l, i) =>
-      i === idx ? { ...l, form: { ...l.form, [key]: value } } : l
-    ));
+    const synced = SYNCED_KEYS.includes(key);
+    setLegs((prev) => prev.map((l, i) => {
+      if (i === idx) {
+        const next = { ...l, form: { ...l.form, [key]: value } };
+        if (synced && idx !== masterLegIdx) {
+          next.overrides = { ...(l.overrides || {}), [key]: true };
+        }
+        return next;
+      }
+      if (synced && idx === masterLegIdx && !(l.overrides || {})[key]) {
+        const patch = { [key]: syncedValueFor(key, value, l.type) };
+        if (STRIKE_INVALIDATING.includes(key)) patch.options_strike = "";
+        return { ...l, form: { ...l.form, ...patch } };
+      }
+      return l;
+    }));
+  }
+
+  // Re-link a leg to the first card's value after it was overridden.
+  function relinkLegField(idx, key) {
+    setLegs((prev) => {
+      const masterValue = prev[masterLegIdx]?.form?.[key] ?? "";
+      return prev.map((l, i) => {
+        if (i !== idx) return l;
+        const overrides = { ...(l.overrides || {}) };
+        delete overrides[key];
+        return { ...l, overrides, form: { ...l.form, [key]: syncedValueFor(key, masterValue, l.type) } };
+      });
+    });
   }
 
   function setLegBulk(idx, updates) {
@@ -350,7 +453,11 @@ function SimulatorInner() {
     setComboEntryLogs(prev => [`[${ts}] ${msg}`, ...prev].slice(0, 100));
   }
 
-  async function runLegOptionEntry({ accountId, currency, optInst, optQty }) {
+  // `h` is this leg's hedge state (see syncLegHedge). It is mutated in place
+  // so the caller still holds the true filled/hedged totals even when this
+  // throws — a stop mid-fill must not lose track of what already executed,
+  // or the filled portion would be left unhedged.
+  async function runLegOptionEntry({ accountId, currency, optInst, optQty, h, legLabel }) {
     const optDir = optQty > 0 ? "buy" : "sell";
     const totalQty = Math.abs(optQty);
     // Cumulative fill across all re-quotes for this leg — a re-quote after
@@ -360,6 +467,12 @@ function SimulatorInner() {
     // replacement was placed for the full 3 lots again instead of the 1
     // lot still outstanding.
     let filledSoFar = 0;
+    // Weighted-average entry price across every order this leg takes to
+    // fill — a re-quote after a partial fill means the leg can fill across
+    // several orders at different prices, and using only the last order's
+    // price (or a post-fill ticker snapshot) doesn't reflect what was
+    // actually paid/received.
+    let fillWeightedSum = 0;
 
     async function place(mid) {
       // Re-checked right before every order placement, not just once at the
@@ -377,7 +490,11 @@ function SimulatorInner() {
       const data = await res.json();
       if (!res.ok || !data.order_id) throw new Error(`Option order failed: ${data.error}`);
       addComboLog(`Order #${data.order_id.slice(-8)} — ${data.order_state}`);
-      if (data.order_state === "filled") filledSoFar = totalQty;
+      if (data.order_state === "filled") {
+        fillWeightedSum += remainingQty * (parseFloat(data.price) || mid);
+        filledSoFar = totalQty;
+        if (h) h.filledOpt = totalQty;
+      }
       return { orderId: data.order_id, mid, filled: data.order_state === "filled" };
     }
 
@@ -403,9 +520,19 @@ function SimulatorInner() {
       const stData = await stRes.json();
       const filledOnThisOrder = parseFloat(stData.filled_amount ?? 0);
       const cumFilled = filledSoFar + filledOnThisOrder;
+      // Publish the live fill so the hedge tracks it continuously — and so a
+      // stop at this instant still knows exactly how much needs hedging.
+      if (h) {
+        h.filledOpt = cumFilled;
+        try {
+          await syncLegHedge({ accountId, currency, h, filledOpt: cumFilled, totalOpt: totalQty, settled: false, legLabel });
+        } catch (e) { addComboLog(`${legLabel} hedge error: ${e.message}`); }
+      }
       if (stData.order_state === "filled" || cumFilled >= totalQty - 1e-9) {
         addComboLog("Option filled!");
+        fillWeightedSum += filledOnThisOrder * (parseFloat(stData.price) || mid);
         filledSoFar = totalQty;
+        if (h) h.filledOpt = totalQty;
         filled = true;
         break;
       }
@@ -427,7 +554,10 @@ function SimulatorInner() {
           addComboLog(`Cancel failed (${cancelData.error || cancelRes.status}) — re-checking next tick instead of placing a duplicate order.`);
           continue;
         }
-        filledSoFar = filledSoFar + parseFloat(cancelData.filled_amount ?? filledOnThisOrder);
+        const filledByThisOrder = parseFloat(cancelData.filled_amount ?? filledOnThisOrder);
+        fillWeightedSum += filledByThisOrder * (parseFloat(cancelData.price) || mid);
+        filledSoFar = filledSoFar + filledByThisOrder;
+        if (h) h.filledOpt = filledSoFar;
         if (filledSoFar >= totalQty - 1e-9) {
           addComboLog("Option filled during cancel!");
           filledSoFar = totalQty;
@@ -442,27 +572,126 @@ function SimulatorInner() {
       }
     }
 
-    // Fetch the current USD mark price for entry-price display/tracking
-    // (approximation, same as the rest of the app — exact fill price isn't
-    // separately confirmed here).
+    // fillWeightedSum/totalQty is the TRUE average fill price across every
+    // order this leg took to fill, in Deribit's raw coin-denominated terms
+    // (e.g. 0.0195 ETH) — options are quoted that way, not in USD. Convert
+    // using a fresh underlying price fetch (the option's own raw price can
+    // legitimately move a lot between re-quotes; the underlying moving
+    // slightly in the few seconds since the last tick is a much smaller
+    // residual error than using the wrong price entirely, which is what a
+    // post-fill ticker snapshot did before this fix).
+    const avgPriceRaw = totalQty > 0 ? fillWeightedSum / totalQty : null;
+    // Linear (USDC/USDT-settled) tokens like SOL_USDC/XRP_USDC quote the
+    // option premium directly in USD already — multiplying by underlying_price
+    // (~$74 for SOL) would inflate a ~$1 premium to ~$74. Mirrors the isLinear
+    // check in /api/market's ticker route.
+    if (/_USDC$|_USDT$/i.test(currency)) return avgPriceRaw;
     try {
       const tRes  = await fetch(`/api/market?account_id=${accountId}&token=${currency}&action=ticker&instrument=${encodeURIComponent(optInst)}`);
       const tData = await tRes.json();
+      if (avgPriceRaw != null) {
+        const toUsd = tData.underlying_price || (tData.mark_price_raw ? tData.mark_price_usd / tData.mark_price_raw : 1);
+        return avgPriceRaw * toUsd;
+      }
       return tData.mark_price_usd ?? null;
     } catch { return null; }
   }
 
-  async function runLegFuturesEntry({ accountId, futInst, futQty }) {
-    const dir = futQty > 0 ? "buy" : "sell";
-    addComboLog(`Placing futures MARKET ${dir} ${Math.abs(futQty)}x ${futInst}`);
-    const res  = await fetch("/api/deribit-order", {
+  // Brings ONE leg's futures hedge up to the fraction of that leg's option
+  // which has actually filled. Same two changes as the single-leg page:
+  //
+  //  1. PROPORTIONAL, not all-or-nothing. Previously a leg whose option was
+  //     stopped or errored mid-fill was marked "rejected" and its futures step
+  //     skipped entirely — leaving the filled portion of a short option naked,
+  //     which on a short call is unbounded risk.
+  //  2. MAKER, not market. Posted at the near touch with post_only: Deribit
+  //     charges 0% maker vs 0.05% taker on BTC-PERPETUAL, and post_only makes
+  //     Deribit reprice rather than let the order cross, so it can never
+  //     silently pay taker.
+  //
+  // Progress is tracked as a FRACTION of each order (filled_amount ÷ amount),
+  // which is unit-free — "amount" is USD notional for inverse futures but coin
+  // qty for linear ones, and the client never has to replicate that mapping.
+  // `h` is the leg's mutable hedge state; returns true once caught up.
+  async function syncLegHedge({ accountId, currency, h, filledOpt, totalOpt, settled, legLabel }) {
+    if (!h.futInst || !h.futQty) return true;
+    const totalFut = Math.abs(h.futQty);
+
+    const credit = (coin, price) => {
+      if (!(coin > 0)) return;
+      h.hedged   = (h.hedged || 0) + coin;
+      h.weighted = (h.weighted || 0) + coin * (parseFloat(price) || 0);
+    };
+
+    if (h.orderId) {
+      const d = await fetch(`/api/deribit-order?account_id=${accountId}&order_id=${h.orderId}`)
+        .then(r => r.json()).catch(() => ({}));
+      const placed = h.orderCoin || 0;
+      const frac = parseFloat(d.amount) > 0 ? (parseFloat(d.filled_amount) || 0) / parseFloat(d.amount) : 0;
+
+      if (d.order_state === "filled") {
+        credit(placed, d.price);
+        addComboLog(`${legLabel} hedge filled ${placed} @ ${d.price} (maker)`);
+        h.orderId = null; h.orderCoin = 0;
+      } else if (d.order_state === "cancelled" || d.order_state === "rejected") {
+        credit(placed * frac, d.price);
+        h.orderId = null; h.orderCoin = 0;
+      } else {
+        const fD = await fetch(`/api/market?account_id=${accountId}&token=${currency}&action=futures&instrument=${encodeURIComponent(h.futInst)}`)
+          .then(r => r.json()).catch(() => ({}));
+        const touch = h.futDir === "buy" ? fD.best_bid : fD.best_ask;
+        if (touch > 0 && h.orderPrice > 0 && Math.abs(touch - h.orderPrice) > 1e-9) {
+          const cRes = await fetch(`/api/deribit-order?account_id=${accountId}&order_id=${h.orderId}`, { method: "DELETE" });
+          const cD   = await cRes.json().catch(() => ({}));
+          if (!cRes.ok) return false; // cancel failed — retry rather than risk a duplicate
+          const cFrac = parseFloat(cD.amount) > 0 ? (parseFloat(cD.filled_amount) || 0) / parseFloat(cD.amount) : frac;
+          credit(placed * cFrac, cD.price);
+          h.orderId = null; h.orderCoin = 0;
+        } else {
+          return false; // resting at the right price
+        }
+      }
+    }
+
+    const ratio  = totalOpt > 0 ? Math.min(1, filledOpt / totalOpt) : 1;
+    const need   = totalFut * ratio - (h.hedged || 0);
+    if (need <= 1e-9) return settled || (ratio >= 1 && (h.hedged || 0) >= totalFut - 1e-9);
+    if (settled && need < totalFut * 0.01) {
+      addComboLog(`${legLabel} remaining hedge ${need.toFixed(6)} is negligible — finishing.`);
+      return true;
+    }
+
+    const fD = await fetch(`/api/market?account_id=${accountId}&token=${currency}&action=futures&instrument=${encodeURIComponent(h.futInst)}`)
+      .then(r => r.json()).catch(() => ({}));
+    const touch = h.futDir === "buy" ? fD.best_bid : fD.best_ask;
+    if (!(touch > 0)) return false;
+
+    const data = await fetch("/api/deribit-order", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ account_id: accountId, instrument: futInst, qty: Math.abs(futQty), direction: dir, is_market: true }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(`Futures failed: ${data.error}`);
-    addComboLog(`Futures filled @ ${data.price ?? "market"}`);
-    return data.price ?? null;
+      body: JSON.stringify({
+        account_id: accountId, instrument: h.futInst, qty: need,
+        direction: h.futDir, price: touch, is_market: false, post_only: true,
+      }),
+    }).then(r => r.json()).catch(() => ({}));
+    if (!data.order_id) {
+      addComboLog(`${legLabel} hedge order failed: ${data.error || "unknown"} — will retry.`);
+      return false;
+    }
+    addComboLog(`${legLabel} hedging ${need.toFixed(6)} (option ${(ratio * 100).toFixed(0)}% filled) — maker ${h.futDir} @ ${touch}`);
+    h.orderId = data.order_id; h.orderPrice = touch; h.orderCoin = need;
+    return false;
+  }
+
+  // Works a leg's hedge to completion once its option side has settled —
+  // whether it filled fully or was stopped part-way.
+  async function settleLegHedge({ accountId, currency, h, filledOpt, totalOpt, legLabel }) {
+    if (!h.futInst || !h.futQty || filledOpt <= 0) return null;
+    for (let i = 0; i < 150; i++) { // ~5 min ceiling, then hand back what's done
+      const done = await syncLegHedge({ accountId, currency, h, filledOpt, totalOpt, settled: true, legLabel });
+      if (done) break;
+      await sleep(2000);
+    }
+    return h.hedged > 0 && h.weighted > 0 ? h.weighted / h.hedged : null;
   }
 
   async function handleExecute() {
@@ -511,27 +740,51 @@ function SimulatorInner() {
         plans.push({ i, leg, optQty, futQty, currency: (leg.form.token || "ETH").toUpperCase(), optInst, futInst });
       });
 
+      // One hedge state per leg, created BEFORE phase 1 and mutated in place
+      // as the option fills. Holding it out here is what lets phase 2 still
+      // see how much a leg filled even when that leg threw (stopped, errored)
+      // — the case that previously left a filled option with no hedge at all.
+      const hedges = plans.map(p => ({
+        futInst: p.futInst, futQty: p.futQty,
+        futDir: p.futQty > 0 ? "buy" : "sell",
+        hedged: 0, weighted: 0, orderId: null, orderPrice: 0, orderCoin: 0, filledOpt: 0,
+      }));
+
       // Phase 1 — every leg's OPTION placed at the same time (each still
       // chases its own mid independently) instead of one after another, so
       // the underlying price hasn't had time to drift between legs by the
-      // time the last one goes in.
+      // time the last one goes in. Each leg's hedge now builds alongside its
+      // own fill rather than waiting for phase 2.
       addComboLog(`Placing ${plans.length} leg(s)' options simultaneously so entry prices stay close together...`);
-      const optOutcomes = await Promise.allSettled(plans.map(async (p) => {
+      const optOutcomes = await Promise.allSettled(plans.map(async (p, idx) => {
         if (p.optQty === 0) return null;
         addComboLog(`Leg ${p.i + 1} (${p.leg.type}): placing option`);
-        return await runLegOptionEntry({ accountId: selectedAcct, currency: p.currency, optInst: p.optInst, optQty: p.optQty });
+        return await runLegOptionEntry({
+          accountId: selectedAcct, currency: p.currency, optInst: p.optInst, optQty: p.optQty,
+          h: hedges[idx], legLabel: `Leg ${p.i + 1}`,
+        });
       }));
 
-      // Phase 2 — futures for whichever legs' options actually filled. A
-      // leg that failed (or was cancelled) is simply skipped here — it has
-      // no position to hedge — but that failure must never block hedging
-      // the OTHER legs that did fill; leaving those unhedged would be worse
-      // than the original failure.
-      addComboLog(`Placing futures hedges for legs whose option filled...`);
+      // Phase 2 — finish each leg's hedge against what its option ACTUALLY
+      // filled. A leg that threw is no longer skipped: if part of it filled,
+      // that part still gets hedged, because abandoning it would leave a live
+      // short option naked. A leg that filled nothing needs nothing.
+      addComboLog(`Completing futures hedges against actual option fills...`);
       const futOutcomes = await Promise.allSettled(plans.map(async (p, idx) => {
-        if (p.futQty === 0) return null;
-        if (p.optQty !== 0 && optOutcomes[idx].status === "rejected") return null;
-        return await runLegFuturesEntry({ accountId: selectedAcct, futInst: p.futInst, futQty: p.futQty });
+        const h = hedges[idx];
+        if (!h.futInst || p.futQty === 0) return null;
+        // Futures-only leg (no option to track): hedge it in full.
+        const totalOpt  = Math.abs(p.optQty);
+        const filledOpt = totalOpt === 0 ? 1 : h.filledOpt;
+        if (filledOpt <= 0) {
+          addComboLog(`Leg ${p.i + 1}: option filled nothing — no hedge needed.`);
+          return null;
+        }
+        return await settleLegHedge({
+          accountId: selectedAcct, currency: p.currency, h,
+          filledOpt, totalOpt: totalOpt === 0 ? 1 : totalOpt,
+          legLabel: `Leg ${p.i + 1}`,
+        });
       }));
 
       plans.forEach((p, idx) => {
@@ -616,24 +869,34 @@ function SimulatorInner() {
       // was actually entered", not "since this restart".
       let initialTotalUsd = null;
       let initialUsdcEquityUsd = null;
+      let effectiveMonitorMode = comboMonitorMode;
       try {
         const priorData = await fetch(`/api/auto-close-combo?group_id=${groupId}`).then(r => r.json());
+        // != null only — initial_total_usd can legitimately be 0 or
+        // negative under coin-only tracking (a coin-margined wallet can go
+        // negative), so a ">0" filter here would wrongly skip a real,
+        // reusable baseline and silently reset it to a fresh snapshot.
         const withInitial = (priorData.jobs || [])
-          .filter(j => j.initial_total_usd != null && parseFloat(j.initial_total_usd) > 0)
+          .filter(j => j.initial_total_usd != null)
           .sort((a, b) => b.id - a.id)[0];
         if (withInitial) {
           initialTotalUsd = parseFloat(withInitial.initial_total_usd);
           initialUsdcEquityUsd = withInitial.initial_usdc_equity_usd != null ? parseFloat(withInitial.initial_usdc_equity_usd) : null;
+          // Reuse the ORIGINAL job's mode, not whatever the UI currently
+          // shows — the baseline being reused was captured under that mode.
+          if (withInitial.monitor_mode) effectiveMonitorMode = withInitial.monitor_mode;
         }
       } catch { /* fall through to a fresh snapshot below */ }
       if (initialTotalUsd == null) {
         const bal = await fetch(`/api/balance?account_id=${selectedAcct}&mode=collateral&token=${token}`).then(r => r.json());
         if (bal.error) throw new Error(bal.error);
-        // PnL/target tracking is coin-equity ONLY for coin-margined tokens
-        // (BTC/ETH) — the USDC side (futures hedge collateral) is excluded
-        // from the trigger decision, only kept for reference in the alert.
+        // PnL/target tracking is coin-equity for coin-margined tokens
+        // (BTC/ETH) unless the user picked "Combined" — the USDC side
+        // (futures hedge collateral) is then excluded from the trigger
+        // decision, only kept for reference in the alert.
         const isCoinMargined = bal.coin_symbol !== "USDC";
-        initialTotalUsd = isCoinMargined ? (bal.coin_equity_usd ?? 0) : (bal.total_usd ?? 0);
+        const useCoinOnly = isCoinMargined && effectiveMonitorMode !== "combined";
+        initialTotalUsd = useCoinOnly ? (bal.coin_equity_usd ?? 0) : (bal.total_usd ?? 0);
         initialUsdcEquityUsd = isCoinMargined ? (bal.usdc_equity ?? 0) : null;
       }
 
@@ -651,6 +914,7 @@ function SimulatorInner() {
           token,
           initial_total_usd: initialTotalUsd,
           initial_usdc_equity_usd: initialUsdcEquityUsd,
+          monitor_mode:      effectiveMonitorMode,
           target_pnl:        parseFloat(comboTargetPnl),
           legs:               legsPayload,
         }),
@@ -700,6 +964,16 @@ function SimulatorInner() {
     if (!(parseFloat(comboTargetPnl) > 0)) { setComboAcError("Enter a Booking PnL Target first."); return; }
     setComboAcError(null);
     setComboAutoCloseAfterEntry(true);
+    await handleExecute();
+  }
+
+  // Places the legs and stops there — no target required, no monitor started.
+  // The flag is cleared explicitly rather than assumed false: it persists on
+  // the component, so a previous "Execute + Auto-Close" click that errored out
+  // could otherwise leave it set and silently start a monitor off this run.
+  async function handleExecuteOnly() {
+    setComboAcError(null);
+    setComboAutoCloseAfterEntry(false);
     await handleExecute();
   }
 
@@ -822,12 +1096,34 @@ function SimulatorInner() {
             className="w-28 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
           />
         </div>
+        {!!(legs[0]?.form.token && !/_USDC$|_USDT$/i.test(legs[0].form.token)) && (
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-500">Monitor</label>
+            <select
+              value={comboMonitorMode}
+              onChange={e => setComboMonitorMode(e.target.value)}
+              title="Coin Equity Only: ignores the USDC/futures-hedge side entirely. Combined: sums coin + USDC equity, like the original behavior."
+              className="rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            >
+              <option value="coin">Coin Equity Only</option>
+              <option value="combined">Combined (Coin + USDC)</option>
+            </select>
+          </div>
+        )}
+        <button
+          onClick={handleExecuteOnly}
+          disabled={executing || comboAcStarting || !selectedAcct}
+          title="Place all legs only — no Booking PnL Target needed. Start the monitor separately whenever you're ready."
+          className="rounded-lg bg-slate-700 px-5 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-50 transition-colors whitespace-nowrap"
+        >
+          {executing && !comboAutoCloseAfterEntry ? `Executing ${legs.length} legs…` : `Execute (${legs.length} legs)`}
+        </button>
         <button
           onClick={handleExecuteAndAutoClose}
           disabled={executing || comboAcStarting || !selectedAcct}
           className="rounded-lg bg-orange-600 px-5 py-2 text-sm font-bold text-white hover:bg-orange-700 disabled:opacity-50 transition-colors whitespace-nowrap"
         >
-          {executing ? `Executing ${legs.length} legs in parallel…` : comboAcStarting ? "Starting Monitor…" : `⚡ Execute + Auto-Close (${legs.length} legs)`}
+          {executing && comboAutoCloseAfterEntry ? `Executing ${legs.length} legs in parallel…` : comboAcStarting ? "Starting Monitor…" : `⚡ Execute + Auto-Close (${legs.length} legs)`}
         </button>
         {comboEntryPhase === "running" && (
           <button onClick={cancelComboExecute}
@@ -964,6 +1260,9 @@ function SimulatorInner() {
                 form={leg.form}
                 set={(k, v) => setLegField(idx, k, v)}
                 setBulk={(updates) => setLegBulk(idx, updates)}
+                isSyncMaster={idx === masterLegIdx}
+                syncOverrides={leg.overrides || {}}
+                onRelinkField={(k) => relinkLegField(idx, k)}
                 derived={deriveds[idx] || {}}
                 canRemove={legs.length > 2}
                 onRemove={() => removeLeg(idx)}
@@ -1103,9 +1402,33 @@ export default function CombinedSimulator() {
 
 /* ── Leg Card ─────────────────────────────────────────── */
 
-const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, form, set, setBulk, derived, canRemove, onRemove, accountId }, ref) {
+const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, form, set, setBulk, derived, canRemove, onRemove, accountId, isSyncMaster = false, syncOverrides = {}, onRelinkField }, ref) {
   const inp   = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
   const style = LEG_STYLES[legType];
+
+  // Label for a field that follows the first card: marks the source, and on a
+  // follower that was edited directly shows it's gone custom with a way back.
+  const isOverridden = (key) => !isSyncMaster && !!syncOverrides[key];
+  const syncLabel = (key, title) => (
+    <span className="flex items-center gap-1.5">
+      {title}
+      {isSyncMaster && <span className="text-[10px] font-normal text-blue-600">applies to all legs</span>}
+      {isOverridden(key) && (
+        <>
+          <span className="text-[10px] font-normal text-amber-600">custom</span>
+          <button
+            type="button"
+            onClick={() => onRelinkField?.(key)}
+            title="Follow the first leg's value again"
+            className="text-[10px] text-slate-400 hover:text-blue-600 underline"
+          >
+            re-link
+          </button>
+        </>
+      )}
+    </span>
+  );
+  const syncCls = (key) => (isOverridden(key) ? "border-amber-300 bg-amber-50" : "");
 
   // Per-leg live data state
   const [liveExpiries,   setLiveExpiries]   = useState([]);
@@ -1207,7 +1530,7 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
           iv:                data.mark_iv != null ? String(Math.round(data.mark_iv * 10) / 10) : form.iv,
           opt_mid_price_raw: String(data.mid_price_raw ?? data.mark_price_raw ?? ""),
         };
-        if (!preserveRef.current) upd.opt_entry_price = data.mark_price_usd.toFixed(4);
+        if (!preserveRef.current) upd.opt_entry_price = fmtOptPrice(data.mark_price_usd, data);
         setBulk(upd);
       })
       .catch(() => {})
@@ -1235,7 +1558,7 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
       const update = {};
       if (optRes && optRes.ok && optData?.mark_price_usd != null) {
         setTickerInfo({ ...optData, instrument: inst });
-        update.opt_entry_price   = optData.mark_price_usd.toFixed(4);
+        update.opt_entry_price   = fmtOptPrice(optData.mark_price_usd, optData);
         update.iv                = optData.mark_iv != null ? String(Math.round(optData.mark_iv * 10) / 10) : form.iv;
         update.opt_mid_price_raw = String(optData.mid_price_raw ?? optData.mark_price_raw ?? "");
       }
@@ -1293,8 +1616,8 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
 
       <div className="p-5 space-y-4">
         <div className="grid grid-cols-2 gap-3">
-          <F label="Entry Date"><input type="date" value={form.entry_date} onChange={(e) => set("entry_date", e.target.value)} className={inp} /></F>
-          <F label="Token">
+          <F label={syncLabel("entry_date", "Entry Date")}><input type="date" value={form.entry_date} onChange={(e) => set("entry_date", e.target.value)} className={`${inp} ${syncCls("entry_date")}`} /></F>
+          <F label={syncLabel("token", "Token")}>
             {manualToken ? (
               <div className="flex gap-2">
                 <input
@@ -1333,7 +1656,7 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
           <F label="Investment"><input type="number" step="any" value={form.investment} onChange={(e) => set("investment", e.target.value)} className={inp} /></F>
 
           {/* Expiry — dropdown when live */}
-          <F label={hasLiveData ? "Expiry (live)" : "Expiry Date"}>
+          <F label={syncLabel("expiry", hasLiveData ? "Expiry (live)" : "Expiry Date")}>
             {hasLiveData ? (
               <select value={form.expiry} onChange={e => { preserveRef.current = false; set("expiry", e.target.value); set("options_strike", ""); }} className={inp}>
                 {liveExpiries.map(e => (
@@ -1359,9 +1682,12 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
             )}
           </F>
 
-          <F label={`Entry Qty${legType.endsWith("SHORT") ? " (negative)" : ""}`}>
+          <F label={syncLabel("opt_entry_qty", `Entry Qty${legType.endsWith("SHORT") ? " (negative)" : ""}`)}>
             <input type="number" step="any" value={form.opt_entry_qty} onChange={(e) => set("opt_entry_qty", e.target.value)}
-              className={`${inp} ${legType.endsWith("SHORT") ? "border-orange-300 bg-orange-50" : ""}`} />
+              className={`${inp} ${
+                isOverridden("opt_entry_qty") ? "border-amber-300 bg-amber-50"
+                : legType.endsWith("SHORT") ? "border-orange-300 bg-orange-50" : ""
+              }`} />
           </F>
           <F label={tickerInfo ? "Entry Price (live)" : "Entry Price"}>
             <input type="number" step="any" value={form.opt_entry_price} onChange={(e) => set("opt_entry_price", e.target.value)} className={inp} />
@@ -1380,15 +1706,19 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
             </F>
           )}
           <F label="Fut Qty"><input type="number" step="any" value={form.fut_qty} onChange={(e) => set("fut_qty", e.target.value)} className={inp} /></F>
-          <F label={hasLiveData && form.fut_entry_price ? "Fut Entry Price (live)" : "Fut Entry Price"}>
-            <input type="number" step="any" value={form.fut_entry_price} onChange={(e) => set("fut_entry_price", e.target.value)} className={inp} />
+          <F label={syncLabel("fut_entry_price", hasLiveData && form.fut_entry_price ? "Fut Entry Price (live)" : "Fut Entry Price")}>
+            <input type="number" step="any" value={form.fut_entry_price} onChange={(e) => set("fut_entry_price", e.target.value)}
+              className={`${inp} ${syncCls("fut_entry_price")}`} />
           </F>
           <F label="Fut Exit Price"><input type="number" step="any" value={form.fut_exit_price} onChange={(e) => set("fut_exit_price", e.target.value)} className={inp} /></F>
           <F label={tickerInfo ? "IV (%) (live)" : "IV (%) for BS"}>
             <input type="number" step="0.5" min="1" max="500" placeholder="e.g. 30" value={form.iv} onChange={(e) => set("iv", e.target.value)} className={`${inp} border-indigo-200 bg-indigo-50`} />
           </F>
-          <F label="Upside Distance"><input type="number" step="any" value={form.upside_distance} onChange={(e) => set("upside_distance", e.target.value)} className={inp} /></F>
-          <F label="Down Distance"><input type="number" step="any" value={form.down_distance} onChange={(e) => set("down_distance", e.target.value)} className={inp} /></F>
+          {[["upside_distance", "Upside Distance"], ["down_distance", "Down Distance"]].map(([key, title]) => (
+            <F key={key} label={syncLabel(key, title)}>
+              <input type="number" step="any" value={form[key]} onChange={(e) => set(key, e.target.value)} className={`${inp} ${syncCls(key)}`} />
+            </F>
+          ))}
           <F label="Basket Distance"><input type="number" step="any" value={form.basket_distance} onChange={(e) => set("basket_distance", e.target.value)} className={inp} /></F>
           <F label="Basket Loss"><input type="number" step="any" value={form.basket_loss} onChange={(e) => set("basket_loss", e.target.value)} className={inp} /></F>
           <F label="Futures PnL"><input type="number" step="any" value={form.fut_pnl} onChange={(e) => set("fut_pnl", e.target.value)} className={inp} /></F>
@@ -1399,13 +1729,13 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
               className={`${inp} bg-slate-50 text-slate-500 cursor-not-allowed`}
               title="Auto-calculated: Futures PnL + Options PnL + Market Making PL" />
           </F>
-          <F label="Status">
-            <select value={form.status} onChange={(e) => set("status", e.target.value)} className={inp}>
+          <F label={syncLabel("status", "Status")}>
+            <select value={form.status} onChange={(e) => set("status", e.target.value)} className={`${inp} ${syncCls("status")}`}>
               <option value="open">Open</option>
               <option value="closed">Closed</option>
             </select>
           </F>
-          <F label="End Date"><input type="date" value={form.end_date} onChange={(e) => set("end_date", e.target.value)} className={inp} /></F>
+          <F label={syncLabel("end_date", "End Date")}><input type="date" value={form.end_date} onChange={(e) => set("end_date", e.target.value)} className={`${inp} ${syncCls("end_date")}`} /></F>
         </div>
 
         {/* Refresh live price button + ticker info */}

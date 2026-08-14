@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
-import pool from "../../../lib/options-db";
+import { auth as sharedAuth } from "../../../lib/deribit-close-helpers.js";
 
 export const dynamic = "force-dynamic";
-
-const DERIBIT_LIVE = "https://www.deribit.com/api/v2";
-const DERIBIT_TEST = "https://test.deribit.com/api/v2";
 
 async function deribitRpc(base, method, params, accessToken = null) {
   const headers = { "Content-Type": "application/json" };
@@ -23,22 +20,21 @@ async function deribitRpc(base, method, params, accessToken = null) {
   return json.result;
 }
 
+// Deribit invalidates a key's PRIOR access token the moment a new one is
+// minted for the same client_id/client_secret — only one active session per
+// API key. This route used to call public/auth fresh on every single
+// request (every price check, every order, every poll), which silently
+// invalidated whatever token the auto-close worker (lib/deribit-close-helpers.js)
+// had cached for that same account. The worker wouldn't find out until its
+// next poll came back "unauthorized (code 13009)", and kept failing on the
+// now-dead token until its own cache TTL happened to expire — exactly the
+// failure seen on a live SOL job that had been running fine for 30+ minutes.
+// Sharing the SAME cached auth() here closes that race: the whole app now
+// mints at most one token per account, so nothing can invalidate a session
+// out from under a concurrently-running worker.
 async function getAuth(accountId) {
-  const [rows] = await pool.query(
-    `SELECT api_key, api_secret, testnet FROM trading_accounts WHERE id = ?`,
-    [accountId]
-  );
-  if (!rows.length) throw new Error("Account not found");
-  const { api_key, api_secret, testnet } = rows[0];
-  if (!api_key || !api_secret) throw new Error("No credentials for this account");
-  const base = testnet ? DERIBIT_TEST : DERIBIT_LIVE;
-  const auth = await deribitRpc(base, "public/auth", {
-    grant_type: "client_credentials",
-    client_id: api_key.trim(),
-    client_secret: api_secret.trim(),
-  });
-  if (!auth?.access_token) throw new Error("Auth failed");
-  return { accessToken: auth.access_token, base };
+  const { token, base } = await sharedAuth(accountId);
+  return { accessToken: token, base };
 }
 
 function roundToTick(value, tickSize, direction = "buy") {
@@ -128,9 +124,15 @@ export async function POST(request) {
         console.warn(`[deribit-order] could not get reference price for ${instrument}, sending raw qty as amount`);
       }
     } else if (contractSize > 1) {
+      // "amount" stays denominated in the underlying coin (e.g. SOL) — Deribit
+      // just requires it to be an integer multiple of contract_size, same as
+      // the inverse-future USD case above. Rounding down to a raw contract
+      // count (and sending THAT as amount) sent 1/contractSize of the intended
+      // size and tripped Deribit's -32602 "Invalid params" (below min_trade_amount).
       const contracts = Math.max(1, Math.round(amount / contractSize));
-      console.log(`[deribit-order] ${instrument}: coin_qty=${amount}, contract_size=${contractSize} → amount(contracts)=${contracts}`);
-      amount = contracts;
+      const rounded   = contracts * contractSize;
+      console.log(`[deribit-order] ${instrument}: coin_qty=${amount}, contract_size=${contractSize} → amount(rounded)=${rounded}`);
+      amount = rounded;
     }
 
     const params = {
@@ -145,13 +147,19 @@ export async function POST(request) {
 
     const result = await deribitRpc(base, method, params, accessToken);
     const order = result.order;
+    // average_price is the true VWAP across every fill — a market order (or
+    // a maker order that fills in fragments) can execute across several
+    // price levels, and order.price alone reflects only one of them, not
+    // what was actually paid/received. Confirmed incident: a 7-fill futures
+    // market sweep spanning $1878.65-$1879.05 was reported in the entry
+    // alert as $1877.45 — order.price, not the real average.
     return NextResponse.json({
       ok:           true,
       order_id:     order.order_id,
       amount:       order.amount,
       filled_amount: order.filled_amount,
       order_state:  order.order_state,
-      price:        order.price,
+      price:        order.average_price || order.price,
     });
   } catch (err) {
     console.error("[deribit-order POST]", err.message);
@@ -177,7 +185,7 @@ export async function GET(request) {
       amount:       result.amount,
       filled_amount: result.filled_amount,
       order_state:  result.order_state,
-      price:        result.price,
+      price:        result.average_price || result.price,
     });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
@@ -200,6 +208,7 @@ export async function DELETE(request) {
       order_id:     result.order_id,
       filled_amount: result.filled_amount,
       order_state:  result.order_state,
+      price:        result.average_price || result.price,
     });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });

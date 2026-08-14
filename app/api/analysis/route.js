@@ -13,7 +13,7 @@ export async function GET(request) {
   const where = [];
   const params = [];
   if (symbol)  { where.push("token_symbol = ?"); params.push(symbol); }
-  if (account) { where.push("token_name = ?");    params.push(account); }
+  if (account) { where.push("account = ?");       params.push(account); }
   if (from)    { where.push("entry_datetime >= ?"); params.push(`${from} 00:00:00`); }
   if (to)      { where.push("entry_datetime <= ?"); params.push(`${to} 23:59:59`); }
   const W = where.length ? `WHERE ${where.join(" AND ")}` : "";
@@ -74,7 +74,7 @@ export async function GET(request) {
 
     // Distinct symbols + accounts for filters
     const [symbolRows]  = await pool.query(`SELECT DISTINCT token_symbol FROM bot_entries WHERE token_symbol IS NOT NULL AND token_symbol != '' ORDER BY token_symbol`);
-    const [accountRows] = await pool.query(`SELECT DISTINCT token_name FROM bot_entries WHERE token_name IS NOT NULL AND token_name != '' ORDER BY token_name`);
+    const [accountRows] = await pool.query(`SELECT DISTINCT account FROM bot_entries WHERE account IS NOT NULL AND account != '' ORDER BY account`);
 
     return NextResponse.json({
       stats,
@@ -84,7 +84,7 @@ export async function GET(request) {
       worstPnl:  worstPnl  ? recomputeNetPnl(worstPnl)  : null,
       bestApy:   bestApy   ? recomputeNetPnl(bestApy)   : null,
       symbols:   symbolRows.map((r) => r.token_symbol),
-      accounts:  accountRows.map((r) => r.token_name),
+      accounts:  accountRows.map((r) => r.account),
     });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });

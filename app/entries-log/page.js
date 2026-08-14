@@ -27,13 +27,31 @@ export default function EntriesLog() {
   const [confirmId,  setConfirmId]  = useState(null);
 
   // Filters
+  const [filterExchange, setFilterExchange] = useState("all");
   const [filterSymbol,  setFilterSymbol]  = useState("all");
   const [filterAccount, setFilterAccount] = useState("all");
   const [filterFrom,    setFilterFrom]    = useState("");
   const [filterTo,      setFilterTo]      = useState("");
 
+  const [allAccounts,   setAllAccounts]   = useState([]);
+  const [allSymbols,    setAllSymbols]    = useState([]);
+  const [symExchange,   setSymExchange]   = useState({});
+  const [allExchanges,  setAllExchanges]  = useState([]);
+  const [acctExchange,  setAcctExchange]  = useState({});
+  const [truncated,     setTruncated]     = useState(false);
+
+  // The DATE filter is applied server-side. Doing it client-side only ever
+  // filtered the rows already fetched, and the fetch returned just the newest
+  // page of them — so selecting an older range searched recent rows and found
+  // nothing, even though the entries existed. Refetching on date change is
+  // what makes an older range actually reachable.
   useEffect(() => {
-    fetch("/api/entries")
+    setLoading(true);
+    const qs = new URLSearchParams();
+    if (filterFrom) qs.set("from", filterFrom);
+    if (filterTo)   qs.set("to",   filterTo);
+    qs.set("limit", "500");
+    fetch(`/api/entries?${qs}`)
       .then((r) => r.json())
       .then((json) => {
         if (json.error) throw new Error(json.error);
@@ -43,41 +61,57 @@ export default function EntriesLog() {
           return diff !== 0 ? diff : b.id - a.id;
         });
         setEntries(sorted);
+        // Distinct across the WHOLE table, not just the rows on screen, so a
+        // symbol never disappears from the dropdown just because the current
+        // window happens to exclude it.
+        setAllAccounts(json.accounts || []);
+        setAllSymbols(json.symbols || []);
+        setSymExchange(json.symbolExchange || {});
+        setAllExchanges(json.exchanges || []);
+        setAcctExchange(json.accountExchange || {});
+        setTruncated(!!json.truncated);
+        setError(null);
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [filterFrom, filterTo]);
 
   // Unique symbols (ETH, SOL, BTC…)
+  // Each dropdown is scoped by the one above it, so the choices on offer are
+  // only ever combinations that actually exist.
+  const accountsInExchange = useMemo(() => (
+    filterExchange === "all"
+      ? allAccounts
+      : allAccounts.filter((a) => acctExchange[a] === filterExchange)
+  ), [allAccounts, acctExchange, filterExchange]);
+
   const symbols = useMemo(() => {
-    const s = new Set(entries.map((e) => baseSymbol(e.token_name)).filter(Boolean));
-    return [...s].sort();
-  }, [entries]);
+    const inExchange = filterExchange === "all"
+      ? allSymbols
+      : allSymbols.filter((sym) => symExchange[sym] === filterExchange);
+    return [...new Set(inExchange.map((sym) => baseSymbol(sym)).filter(Boolean))].sort();
+  }, [allSymbols, symExchange, filterExchange]);
 
   // Unique accounts filtered by selected symbol
   const accounts = useMemo(() => {
-    const source = filterSymbol === "all"
-      ? entries
-      : entries.filter((e) => baseSymbol(e.token_name) === filterSymbol);
-    const s = new Set(source.map((e) => e.token_name).filter(Boolean));
-    return [...s].sort();
-  }, [entries, filterSymbol]);
+    return [...new Set(accountsInExchange.filter(Boolean))].sort();
+  }, [accountsInExchange]);
 
   // Reset account when symbol changes
-  const handleSymbolChange = (v) => { setFilterSymbol(v); setFilterAccount("all"); };
+  const handleSymbolChange = (v) => setFilterSymbol(v);
+  const handleExchangeChange = (v) => { setFilterExchange(v); setFilterSymbol("all"); setFilterAccount("all"); };
 
   const filtered = useMemo(() => {
     return entries.filter((e) => {
-      if (filterSymbol  !== "all" && baseSymbol(e.token_name) !== filterSymbol)  return false;
-      if (filterAccount !== "all" && e.token_name !== filterAccount) return false;
-      const d = toLocalDate(e.entry_datetime);
-      if (filterFrom && d && d < filterFrom) return false;
-      if (filterTo   && d && d > filterTo)   return false;
-      return true;
-    });
-  }, [entries, filterSymbol, filterAccount, filterFrom, filterTo]);
+      if (filterExchange !== "all" && (e.exchange || acctExchange[e.account]) !== filterExchange) return false;
+      if (filterSymbol  !== "all" && baseSymbol(e.token_symbol) !== filterSymbol) return false;
+      if (filterAccount !== "all" && e.account !== filterAccount) return false;
+      return true; // dates are handled server-side by the fetch above
 
-  const hasFilters = filterSymbol !== "all" || filterAccount !== "all" || filterFrom || filterTo;
+    });
+  }, [entries, filterExchange, filterSymbol, filterAccount, filterFrom, filterTo, acctExchange]);
+
+  const hasFilters = filterExchange !== "all" || filterSymbol !== "all" || filterAccount !== "all" || filterFrom || filterTo;
 
   async function handleDelete(id) {
     setDeletingId(id);
@@ -111,7 +145,15 @@ export default function EntriesLog() {
 
         {/* Filters */}
         <div className="rounded-xl border border-slate-100 bg-white p-4 shadow-card">
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 items-end">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-500 uppercase tracking-wide">Exchange</label>
+              <select value={filterExchange} onChange={(e) => handleExchangeChange(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none">
+                <option value="all">All Exchanges</option>
+                {allExchanges.map((x) => <option key={x} value={x}>{x}</option>)}
+              </select>
+            </div>
             <div>
               <label className="mb-1 block text-xs font-semibold text-slate-500 uppercase tracking-wide">Symbol</label>
               <select value={filterSymbol} onChange={(e) => handleSymbolChange(e.target.value)}
@@ -140,7 +182,7 @@ export default function EntriesLog() {
             </div>
             <div className="flex items-end gap-2">
               {hasFilters && (
-                <button onClick={() => { setFilterSymbol("all"); setFilterAccount("all"); setFilterFrom(""); setFilterTo(""); }}
+                <button onClick={() => { setFilterExchange("all"); setFilterSymbol("all"); setFilterAccount("all"); setFilterFrom(""); setFilterTo(""); }}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-500 hover:bg-slate-50">
                   Clear Filters
                 </button>

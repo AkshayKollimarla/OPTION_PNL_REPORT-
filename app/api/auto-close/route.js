@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import pool from "@/lib/options-db.js";
 import { ensureAutoCloseTable, startWorker } from "@/lib/auto-close-worker.js";
+import { auth, cancelCloseOrders } from "@/lib/deribit-close-helpers.js";
 import { sendTelegramAlert } from "@/lib/telegram.js";
 
 // GET   /api/auto-close?trade_id=X       → list jobs (optionally filtered)
@@ -34,7 +35,7 @@ export async function GET(req) {
     const [rows] = await pool.query(
       `SELECT id, trade_id, account_id, token, opt_instrument, fut_instrument,
               opt_entry_price, opt_close_price, fut_entry_price, fut_close_price,
-              initial_total_usd, initial_usdc_equity_usd, final_equity_usd, target_pnl, target_total_usd, status,
+              initial_total_usd, initial_usdc_equity_usd, monitor_mode, final_equity_usd, target_pnl, target_total_usd, status,
               last_equity_usd, last_checked_at, created_at, triggered_at, completed_at,
               error_msg
          FROM auto_close_jobs ${where}
@@ -66,6 +67,7 @@ export async function POST(req) {
       fut_entry_price,
       initial_total_usd,
       initial_usdc_equity_usd = null,
+      monitor_mode = "coin",
       target_pnl,
     } = body;
 
@@ -100,8 +102,8 @@ export async function POST(req) {
       `INSERT INTO auto_close_jobs
          (trade_id, account_id, token, opt_instrument, opt_qty, opt_dir, opt_entry_price,
           fut_instrument, fut_qty, fut_dir, fut_entry_price,
-          initial_total_usd, initial_usdc_equity_usd, target_pnl, target_total_usd)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          initial_total_usd, initial_usdc_equity_usd, monitor_mode, target_pnl, target_total_usd)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         trade_id || null,
         account_id, token, opt_instrument,
@@ -109,16 +111,19 @@ export async function POST(req) {
         fut_instrument, parseFloat(fut_qty), fut_dir, futEntryPrice,
         parseFloat(initial_total_usd),
         initial_usdc_equity_usd != null ? parseFloat(initial_usdc_equity_usd) : null,
+        monitor_mode === "combined" ? "combined" : "coin",
         parseFloat(target_pnl), target_total_usd,
       ]
     );
 
     const jobId = result.insertId;
 
-    // initial_total_usd is the coin-only baseline for coin-margined tokens
-    // (BTC/ETH) — PnL/target tracking is coin-equity only. USDC equity is
-    // shown here purely for reference, never used in the trigger math.
-    const isCoinMargined = initial_usdc_equity_usd != null;
+    // initial_total_usd is the coin-only baseline when monitor_mode='coin'
+    // for a coin-margined token — PnL/target tracking is coin-equity only.
+    // USDC equity is shown here purely for reference, never used in the
+    // trigger math. In 'combined' mode initial_total_usd is the whole
+    // account, same as the original pre-coin-tracking behavior.
+    const useCoinOnly = initial_usdc_equity_usd != null && monitor_mode !== "combined";
     const alertResult = await sendTelegramAlert(
       [
         `🟢 <b>Auto-Close Monitor Started</b> — Job #${jobId}`,
@@ -127,11 +132,11 @@ export async function POST(req) {
         optEntryPrice != null ? `Option entry: $${optEntryPrice.toFixed(4)}` : null,
         futEntryPrice != null ? `Futures entry: $${futEntryPrice.toFixed(2)}` : null,
         ``,
-        isCoinMargined
+        useCoinOnly
           ? `Initial ${token} collateral: $${parseFloat(initial_total_usd).toFixed(2)}`
           : `Initial collateral: $${parseFloat(initial_total_usd).toFixed(2)}`,
-        isCoinMargined ? `Initial USDC collateral: $${parseFloat(initial_usdc_equity_usd).toFixed(2)} (reference only)` : null,
-        `Target: +$${parseFloat(target_pnl).toFixed(2)} → closes at $${target_total_usd.toFixed(2)}${isCoinMargined ? ` ${token} equity` : ""}`,
+        useCoinOnly ? `Initial USDC collateral: $${parseFloat(initial_usdc_equity_usd).toFixed(2)} (reference only)` : null,
+        `Target: +$${parseFloat(target_pnl).toFixed(2)} → closes at $${target_total_usd.toFixed(2)}${useCoinOnly ? ` ${token} equity` : " (combined coin+USDC)"}`,
       ].filter(Boolean).join("\n")
     );
 
@@ -201,16 +206,34 @@ export async function DELETE(req) {
     const id = searchParams.get("id");
     if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
-    const [[job]] = await pool.query(`SELECT status FROM auto_close_jobs WHERE id=?`, [id]);
+    const [[job]] = await pool.query(
+      `SELECT status, account_id, opt_instrument, opt_dir FROM auto_close_jobs WHERE id=?`, [id]
+    );
     if (!job) return NextResponse.json({ error: "not found" }, { status: 404 });
     if (["completed","failed","stopped"].includes(job.status)) {
       return NextResponse.json({ error: `Job already ${job.status}` }, { status: 400 });
     }
 
+    // Mark stopped FIRST so the polling loop can't place anything new while
+    // the cancel below is in flight, then take this job's order off the book.
+    // Stopping used to leave it resting: no longer re-quoted as the mark
+    // moved, but still live and able to fill with nothing watching it.
     await pool.query(
       `UPDATE auto_close_jobs SET status='stopped', completed_at=NOW() WHERE id=?`, [id]
     );
-    return NextResponse.json({ ok: true });
+
+    let cancelled = 0;
+    try {
+      if (job.opt_instrument) {
+        const { base, token } = await auth(job.account_id);
+        // By instrument+direction rather than the stored order id, so an
+        // order whose id never got persisted is still cleaned up.
+        cancelled = await cancelCloseOrders(base, token, job.opt_instrument, job.opt_dir);
+      }
+    } catch (e) {
+      return NextResponse.json({ ok: true, cancelled, warning: `Job stopped, but cancelling its open order failed: ${e.message}. Check Deribit for resting orders.` });
+    }
+    return NextResponse.json({ ok: true, cancelled });
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
