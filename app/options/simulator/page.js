@@ -457,7 +457,7 @@ function SimulatorInner() {
   // so the caller still holds the true filled/hedged totals even when this
   // throws — a stop mid-fill must not lose track of what already executed,
   // or the filled portion would be left unhedged.
-  async function runLegOptionEntry({ accountId, currency, optInst, optQty, h, legLabel }) {
+  async function runLegOptionEntry({ accountId, currency, optInst, optQty, h, legLabel, blocking = [], progress, progressIdx }) {
     const optDir = optQty > 0 ? "buy" : "sell";
     const totalQty = Math.abs(optQty);
     // Cumulative fill across all re-quotes for this leg — a re-quote after
@@ -494,6 +494,7 @@ function SimulatorInner() {
         fillWeightedSum += remainingQty * (parseFloat(data.price) || mid);
         filledSoFar = totalQty;
         if (h) h.filledOpt = totalQty;
+        if (progress && progressIdx != null) progress[progressIdx].filled = totalQty;
       }
       return { orderId: data.order_id, mid, filled: data.order_state === "filled" };
     }
@@ -506,10 +507,18 @@ function SimulatorInner() {
     let { orderId, mid, filled } = await place(initialMid);
     if (filled) addComboLog("Option filled immediately!");
 
+    // A leg with partners queued behind it stalls the whole spread when it
+    // won't fill, and by design nothing overrides that — so say so, loudly and
+    // once, rather than letting it sit silently.
+    let waitTicks = 0, stallWarned = false;
     while (!filled) {
       if (comboCancelRef.current) {
         await fetch(`/api/deribit-order?account_id=${accountId}&order_id=${orderId}`, { method: "DELETE" }).catch(() => {});
         throw new Error("Cancelled by user");
+      }
+      if (blocking.length && !stallWarned && ++waitTicks >= 30) {  // ~60s at 2s/tick
+        stallWarned = true;
+        addComboLog(`⚠ ${legLabel} has not filled after ~60s — ${blocking.join(", ")} still held. Nothing else in this spread will be placed until it fills; STOP and adjust if needed.`);
       }
       await sleep(2000);
       if (comboCancelRef.current) {
@@ -522,10 +531,11 @@ function SimulatorInner() {
       const cumFilled = filledSoFar + filledOnThisOrder;
       // Publish the live fill so the hedge tracks it continuously — and so a
       // stop at this instant still knows exactly how much needs hedging.
+      if (progress && progressIdx != null) progress[progressIdx].filled = cumFilled;
       if (h) {
         h.filledOpt = cumFilled;
         try {
-          await syncLegHedge({ accountId, currency, h, filledOpt: cumFilled, totalOpt: totalQty, settled: false, legLabel });
+          await syncLegHedge({ accountId, currency, h, progress, settled: false, legLabel });
         } catch (e) { addComboLog(`${legLabel} hedge error: ${e.message}`); }
       }
       if (stData.order_state === "filled" || cumFilled >= totalQty - 1e-9) {
@@ -533,6 +543,7 @@ function SimulatorInner() {
         fillWeightedSum += filledOnThisOrder * (parseFloat(stData.price) || mid);
         filledSoFar = totalQty;
         if (h) h.filledOpt = totalQty;
+        if (progress && progressIdx != null) progress[progressIdx].filled = totalQty;
         filled = true;
         break;
       }
@@ -558,6 +569,7 @@ function SimulatorInner() {
         fillWeightedSum += filledByThisOrder * (parseFloat(cancelData.price) || mid);
         filledSoFar = filledSoFar + filledByThisOrder;
         if (h) h.filledOpt = filledSoFar;
+        if (progress && progressIdx != null) progress[progressIdx].filled = filledSoFar;
         if (filledSoFar >= totalQty - 1e-9) {
           addComboLog("Option filled during cancel!");
           filledSoFar = totalQty;
@@ -613,7 +625,16 @@ function SimulatorInner() {
   // which is unit-free — "amount" is USD notional for inverse futures but coin
   // qty for linear ones, and the client never has to replicate that mapping.
   // `h` is the leg's mutable hedge state; returns true once caught up.
-  async function syncLegHedge({ accountId, currency, h, filledOpt, totalOpt, settled, legLabel }) {
+  // `progress` is the shared per-leg fill tally for the whole structure:
+  // [{ filled, total }, ...]. The hedge tracks the STRUCTURE's fill, not the
+  // fill of whichever leg happens to carry fut_qty — measuring per-leg made
+  // the hedge timeline depend on an entry-form detail. With fut_qty on the
+  // expensive leg the hedge went on early; parked on the cheap leg (placed
+  // last under premium priority) the entire spread filled with NO hedge and
+  // all of it arrived in one lump at the end. Same structure, same size,
+  // completely different exposure. Each leg still contributes its own fut_qty,
+  // just scaled by the shared ratio, so the totals come out identical either way.
+  async function syncLegHedge({ accountId, currency, h, progress, settled, legLabel }) {
     if (!h.futInst || !h.futQty) return true;
     const totalFut = Math.abs(h.futQty);
 
@@ -653,7 +674,9 @@ function SimulatorInner() {
       }
     }
 
-    const ratio  = totalOpt > 0 ? Math.min(1, filledOpt / totalOpt) : 1;
+    const startAll  = (progress || []).reduce((sum, x) => sum + (x?.total  || 0), 0);
+    const filledAll = (progress || []).reduce((sum, x) => sum + (x?.filled || 0), 0);
+    const ratio  = startAll > 0 ? Math.min(1, filledAll / startAll) : 1;
     const need   = totalFut * ratio - (h.hedged || 0);
     if (need <= 1e-9) return settled || (ratio >= 1 && (h.hedged || 0) >= totalFut - 1e-9);
     if (settled && need < totalFut * 0.01) {
@@ -677,17 +700,17 @@ function SimulatorInner() {
       addComboLog(`${legLabel} hedge order failed: ${data.error || "unknown"} — will retry.`);
       return false;
     }
-    addComboLog(`${legLabel} hedging ${need.toFixed(6)} (option ${(ratio * 100).toFixed(0)}% filled) — maker ${h.futDir} @ ${touch}`);
+    addComboLog(`${legLabel} hedging ${need.toFixed(6)} (structure ${(ratio * 100).toFixed(0)}% filled) — maker ${h.futDir} @ ${touch}`);
     h.orderId = data.order_id; h.orderPrice = touch; h.orderCoin = need;
     return false;
   }
 
   // Works a leg's hedge to completion once its option side has settled —
   // whether it filled fully or was stopped part-way.
-  async function settleLegHedge({ accountId, currency, h, filledOpt, totalOpt, legLabel }) {
-    if (!h.futInst || !h.futQty || filledOpt <= 0) return null;
+  async function settleLegHedge({ accountId, currency, h, progress, legLabel }) {
+    if (!h.futInst || !h.futQty) return null;
     for (let i = 0; i < 150; i++) { // ~5 min ceiling, then hand back what's done
-      const done = await syncLegHedge({ accountId, currency, h, filledOpt, totalOpt, settled: true, legLabel });
+      const done = await syncLegHedge({ accountId, currency, h, progress, settled: true, legLabel });
       if (done) break;
       await sleep(2000);
     }
@@ -750,19 +773,70 @@ function SimulatorInner() {
         hedged: 0, weighted: 0, orderId: null, orderPrice: 0, orderCoin: 0, filledOpt: 0,
       }));
 
-      // Phase 1 — every leg's OPTION placed at the same time (each still
-      // chases its own mid independently) instead of one after another, so
-      // the underlying price hasn't had time to drift between legs by the
-      // time the last one goes in. Each leg's hedge now builds alongside its
-      // own fill rather than waiting for phase 2.
-      addComboLog(`Placing ${plans.length} leg(s)' options simultaneously so entry prices stay close together...`);
-      const optOutcomes = await Promise.allSettled(plans.map(async (p, idx) => {
-        if (p.optQty === 0) return null;
-        addComboLog(`Leg ${p.i + 1} (${p.leg.type}): placing option`);
-        return await runLegOptionEntry({
-          accountId: selectedAcct, currency: p.currency, optInst: p.optInst, optQty: p.optQty,
-          h: hedges[idx], legLabel: `Leg ${p.i + 1}`,
-        });
+      // Shared fill tally for the whole structure — every option leg reports
+      // into it, and the hedge ratio is read from it. A futures-only leg
+      // (optQty 0) contributes nothing, so it can't dilute the ratio.
+      const progress = plans.map(p => ({ filled: 0, total: Math.abs(p.optQty) }));
+
+      // Phase 1 — each SPREAD works in parallel, but the legs INSIDE a spread
+      // go in sequence, most expensive premium first.
+      //
+      // The expensive leg is the one that must not be missed: filling a 3.36
+      // short before its 27.00 long leaves the risky half of the spread naked
+      // at a fraction of the value, and the cheap leg is far easier to fill
+      // afterwards than the expensive one is to chase alone. So the high
+      // premium gets the market to itself, and its partner is only placed once
+      // it has actually filled.
+      //
+      // Calls and puts still run concurrently — they are separate spreads, so
+      // holding one behind the other would only add drift for no protection.
+      const premiumOf = (p) => Math.abs(parseFloat(p.leg.form.opt_entry_price) || 0);
+      const spreadKeyOf = (p) => (p.leg.form.option_type
+        || (String(p.leg.type).startsWith("CALL") ? "CALL" : "PUT"));
+
+      const spreads = {};
+      plans.forEach((p, idx) => {
+        if (p.optQty === 0) return;               // futures-only leg, nothing to sequence
+        const k = spreadKeyOf(p);
+        (spreads[k] = spreads[k] || []).push({ p, idx });
+      });
+      // Highest premium first within each spread.
+      Object.values(spreads).forEach(list => list.sort((a, b) => premiumOf(b.p) - premiumOf(a.p)));
+
+      // Pre-seeded so legs skipped (futures-only, or blocked by a failed
+      // partner) still line up with plans by index for phase 2.
+      const optOutcomes = plans.map(() => ({ status: "fulfilled", value: null }));
+
+      Object.entries(spreads).forEach(([k, list]) => {
+        addComboLog(`${k} spread order: ${list.map(({ p }) => `Leg ${p.i + 1} @ ${premiumOf(p)}`).join(" → ")}`);
+      });
+
+      await Promise.all(Object.entries(spreads).map(async ([k, list]) => {
+        for (let n = 0; n < list.length; n++) {
+          const { p, idx } = list[n];
+          const waiting = list.slice(n + 1).map(({ p: q }) => `Leg ${q.i + 1}`);
+          addComboLog(
+            `Leg ${p.i + 1} (${p.leg.type}) premium ${premiumOf(p)}: placing option` +
+            (waiting.length ? ` — ${waiting.join(", ")} held until this fills` : "")
+          );
+          try {
+            const value = await runLegOptionEntry({
+              accountId: selectedAcct, currency: p.currency, optInst: p.optInst, optQty: p.optQty,
+              h: hedges[idx], legLabel: `Leg ${p.i + 1}`, blocking: waiting,
+              progress, progressIdx: idx,
+            });
+            optOutcomes[idx] = { status: "fulfilled", value };
+          } catch (e) {
+            optOutcomes[idx] = { status: "rejected", reason: e };
+            // Deliberately do NOT place the cheaper leg. Its only purpose is to
+            // offset the expensive one; on its own it is naked risk at a
+            // fraction of the premium, which is worse than not entering.
+            if (waiting.length) {
+              addComboLog(`Leg ${p.i + 1} did not fill (${e.message}) — holding ${waiting.join(", ")}, ${k} spread not entered.`);
+            }
+            break;
+          }
+        }
       }));
 
       // Phase 2 — finish each leg's hedge against what its option ACTUALLY
@@ -773,17 +847,19 @@ function SimulatorInner() {
       const futOutcomes = await Promise.allSettled(plans.map(async (p, idx) => {
         const h = hedges[idx];
         if (!h.futInst || p.futQty === 0) return null;
-        // Futures-only leg (no option to track): hedge it in full.
-        const totalOpt  = Math.abs(p.optQty);
-        const filledOpt = totalOpt === 0 ? 1 : h.filledOpt;
-        if (filledOpt <= 0) {
-          addComboLog(`Leg ${p.i + 1}: option filled nothing — no hedge needed.`);
+        // Nothing anywhere in the structure filled — hedging would create
+        // naked futures exposure against options that don't exist.
+        const anyFilled = progress.some(x => x.filled > 0);
+        const hasOptions = progress.some(x => x.total > 0);
+        if (hasOptions && !anyFilled) {
+          addComboLog(`Leg ${p.i + 1}: no option filled anywhere — no hedge needed.`);
           return null;
         }
+        // A futures-only structure (no option legs at all) hedges in full:
+        // ratio falls back to 1 when there is nothing to measure against.
         return await settleLegHedge({
           accountId: selectedAcct, currency: p.currency, h,
-          filledOpt, totalOpt: totalOpt === 0 ? 1 : totalOpt,
-          legLabel: `Leg ${p.i + 1}`,
+          progress, legLabel: `Leg ${p.i + 1}`,
         });
       }));
 
