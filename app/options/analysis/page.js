@@ -228,10 +228,13 @@ export default function OptionsAnalysis() {
   }, [trade, selectedAccount]);
 
   function loadCumulative() {
-    if (!cumFrom || !cumTo) return;
     setLoadingCum(true);
     setCumBot(null);
-    const p = new URLSearchParams({ date_from: cumFrom, date_to: cumTo });
+    // Either bound may be omitted: no dates at all means the full history,
+    // one date means open-ended on that side.
+    const p = new URLSearchParams();
+    if (cumFrom) p.set("date_from", cumFrom);
+    if (cumTo)   p.set("date_to",   cumTo);
     if (cumAccount !== "all") p.set("account", cumAccount);
     if (cumSymbol  !== "all") p.set("symbol",  cumSymbol);
     fetch(`/api/cumulative-report?${p}`)
@@ -243,7 +246,8 @@ export default function OptionsAnalysis() {
     const opts = allTrades.filter((t) => {
       const d = t.entry_date ? toLocalDateStr(t.entry_date) : null;
       if (!d || d === "0000-00-00") return false;
-      if (d < cumFrom || d > cumTo) return false;
+      if (cumFrom && d < cumFrom) return false;
+      if (cumTo   && d > cumTo)   return false;
       if (cumSymbol !== "all" && baseToken(t.token) !== cumSymbol) return false;
       return true;
     });
@@ -673,9 +677,9 @@ export default function OptionsAnalysis() {
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none" />
                 </div>
                 <div className="flex items-end">
-                  <button onClick={loadCumulative} disabled={!cumFrom || !cumTo || loadingCum}
+                  <button onClick={loadCumulative} disabled={loadingCum}
                     className="w-full rounded-lg bg-teal-600 px-5 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-50">
-                    {loadingCum ? "Loading…" : "Load Report"}
+                    {loadingCum ? "Loading…" : (cumFrom || cumTo) ? "Load Report" : "Load All Data"}
                   </button>
                 </div>
               </div>

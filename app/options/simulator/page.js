@@ -68,6 +68,52 @@ function fmtOptPrice(value, ticker) {
   return n.toFixed(4);
 }
 
+// ── Vertical-spread pricing rule ────────────────────────────────────────────
+// A spread is judged by its NET premium as a percentage of the strike width,
+// not by either leg's own price:
+//
+//     net = premium(expensive strike) − premium(cheap strike)
+//     pct = net / |strikeA − strikeB|
+//
+// e.g. 75C at 5.00 against 85C at 2.50 is a net of 2.50 across a 10-wide
+// spread = 25%. Paying more than that for a debit is overpaying for the same
+// payoff; receiving less than that for a credit is underselling the same risk.
+//
+// TARGET is the fair level, and the hard band either side of it is where
+// chasing stops: a debit is never paid above CAP, a credit never sold below
+// FLOOR. The band is what stops the chase running away — not a tick count or
+// a timer.
+const SPREAD_TARGET_PCT = 0.25;
+const SPREAD_BUY_CAP_PCT = 0.27;   // never pay more than this for a debit
+const SPREAD_SELL_FLOOR_PCT = 0.23; // never sell a credit below this
+
+// The furthest net this spread may trade at, in premium terms.
+function spreadNetLimit(ctx) {
+  return (ctx.isDebit ? SPREAD_BUY_CAP_PCT : SPREAD_SELL_FLOOR_PCT) * ctx.width;
+}
+
+// Clamp one leg's intended price so the PAIR still satisfies the rule.
+//
+// The constraint is symmetric: with net = expensive − cheap, a debit needs
+// net <= limit and a credit needs net >= limit, so each leg's allowed price
+// is bounded by whatever its partner is currently trading or quoting at.
+// Returning the clamped price rather than refusing outright means the leg
+// keeps working at the best price the rule permits instead of stalling.
+function spreadBoundedPrice(ctx, role, proposed) {
+  if (!ctx || !(ctx.width > 0)) return proposed;
+  const partner = ctx.priceOf(role === "expensive" ? "cheap" : "expensive");
+  if (partner == null || !(partner > 0)) return proposed; // partner unknown — no bound yet
+  const limit = spreadNetLimit(ctx);
+  if (ctx.isDebit) {
+    return role === "expensive"
+      ? Math.min(proposed, partner + limit)   // don't pay up beyond the cap
+      : Math.max(proposed, partner - limit);  // don't sell the offset too cheap
+  }
+  return role === "expensive"
+    ? Math.max(proposed, partner + limit)     // don't sell the credit too cheap
+    : Math.min(proposed, partner - limit);    // don't pay up for the offset
+}
+
 // Build Deribit instrument name from parts
 function buildDeribitInst(token, expiry, strike, optType) {
   if (!token || !expiry || !strike) return null;
@@ -175,6 +221,10 @@ function SimulatorInner() {
   const comboGroupIdRef     = useRef(null);
 
   // Combo auto-close (server-side job spanning all legs, combined equity trigger)
+  // How many days forward the Black-Scholes scenario is projected. 0 = today;
+  // at expiry the model is dropped for the actual payoff, since there is no
+  // time value left to price.
+  const [bsDaysFwd, setBsDaysFwd] = useState(0);
   const [comboTargetPnl,        setComboTargetPnl]        = useState("");
   // 'coin' — track only the group's own coin equity (BTC/ETH), ignoring the
   // USDC/futures-hedge side entirely. 'combined' — whole account (coin +
@@ -414,31 +464,54 @@ function SimulatorInner() {
     net: deriveds.reduce((s, d) => s + n(d.estimated_downside_net_pnl), 0),
   };
 
-  function legBsTodayPnl(form, optType, S_target) {
+  // Days remaining for a leg, optionally rolled forward. Every scenario reads
+  // its horizon from here so one leg cannot be priced on a different date
+  // from another.
+  function legDte(form, daysFwd = 0) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const expD  = form.expiry ? (() => { const d = new Date(form.expiry); d.setHours(0,0,0,0); return d; })() : null;
+    const dte   = expD ? Math.max(0, Math.round((expD - today) / 86400000)) : 0;
+    return Math.max(0, dte - (daysFwd || 0));
+  }
+
+  // PnL for a leg at a target underlying, `daysFwd` days from now.
+  //
+  // Rolling the clock forward is just shrinking T: the same Black-Scholes
+  // call with less time left, which is what makes theta visible in the
+  // scenario. Once a leg reaches expiry there is no time value to model, so
+  // it switches to the actual payoff — the two must not be mixed, since
+  // pricing an expired option with T=0 is undefined.
+  function legBsTodayPnl(form, optType, S_target, daysFwd = 0) {
     const K    = strikeNumber(form.options_strike);
     const ep   = parseFloat(form.opt_entry_price) || 0;
     const qty  = parseFloat(form.opt_entry_qty)   || 0;
     if (!K || !qty) return 0;
     const sigma = Math.max(0.01, (parseFloat(form.iv) || 30) / 100);
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const expD  = form.expiry ? (() => { const d = new Date(form.expiry); d.setHours(0,0,0,0); return d; })() : null;
-    const dte   = expD ? Math.max(0, Math.round((expD - today) / 86400000)) : 0;
-    const T     = dte / 365;
+    const T     = legDte(form, daysFwd) / 365;
     return T > 0
       ? currentPnl(S_target, K, T, RISK_FREE, sigma, optType, ep, qty)
       : expiryPnl(S_target, K, optType, ep, qty);
   }
 
+  // Furthest expiry in the structure — the slider's ceiling, so "expiry day"
+  // means every leg has expired rather than just the nearest one.
+  const maxDte = legs.reduce((m, l) => Math.max(m, legDte(l.form, 0)), 0);
+  // Row labels say which day is being priced, so a projected figure is never
+  // mistaken for today's.
+  const bsLabel = bsDaysFwd <= 0 ? "Today BS"
+    : bsDaysFwd >= maxDte ? "Expiry BS"
+    : `Day ${bsDaysFwd + 1} BS`;
+
   const bsUpsideCombined = legs.reduce((s, l) => {
     const S   = parseFloat(l.form.fut_entry_price) || 0;
     const opt = (l.form.option_type || "PUT").toUpperCase();
-    return s + legBsTodayPnl(l.form, opt, S + (parseFloat(l.form.upside_distance) || 0));
+    return s + legBsTodayPnl(l.form, opt, S + (parseFloat(l.form.upside_distance) || 0), bsDaysFwd);
   }, 0);
 
   const bsDownsideCombined = legs.reduce((s, l) => {
     const S   = parseFloat(l.form.fut_entry_price) || 0;
     const opt = (l.form.option_type || "PUT").toUpperCase();
-    return s + legBsTodayPnl(l.form, opt, S - (parseFloat(l.form.down_distance) || 0));
+    return s + legBsTodayPnl(l.form, opt, S - (parseFloat(l.form.down_distance) || 0), bsDaysFwd);
   }, 0);
 
   /* ── Smart per-leg entry engine ───────────────────────
@@ -457,7 +530,7 @@ function SimulatorInner() {
   // so the caller still holds the true filled/hedged totals even when this
   // throws — a stop mid-fill must not lose track of what already executed,
   // or the filled portion would be left unhedged.
-  async function runLegOptionEntry({ accountId, currency, optInst, optQty, h, legLabel, blocking = [], progress, progressIdx }) {
+  async function runLegOptionEntry({ accountId, currency, optInst, optQty, h, legLabel, progress, progressIdx, spreadCtx = null, spreadRole = null }) {
     const optDir = optQty > 0 ? "buy" : "sell";
     const totalQty = Math.abs(optQty);
     // Cumulative fill across all re-quotes for this leg — a re-quote after
@@ -482,6 +555,16 @@ function SimulatorInner() {
       // loop; setting the ref alone doesn't abort work already in progress.
       if (comboCancelRef.current) throw new Error("Cancelled by user");
       const remainingQty = Math.max(0, totalQty - filledSoFar);
+      // Bounded by the partner leg so the PAIR stays inside the net rule. The
+      // clamp is what stops the chase: once the partner's price means paying
+      // more than the cap (or receiving less than the floor), this leg simply
+      // stops improving instead of following the market indefinitely.
+      const wanted = mid;
+      mid = spreadBoundedPrice(spreadCtx, spreadRole, mid);
+      if (spreadCtx && Math.abs(mid - wanted) > 1e-9) {
+        addComboLog(`${legLabel} capped by spread rule: ${wanted.toFixed(5)} → ${mid.toFixed(5)} (net kept within ${spreadCtx.isDebit ? "cap" : "floor"})`);
+      }
+      if (spreadCtx && spreadRole) spreadCtx.quote[spreadRole === "expensive" ? "exp" : "cheap"] = mid;
       addComboLog(`Placing ${optDir} ${remainingQty}x ${optInst} @ mid ${mid.toFixed(5)}`);
       const res = await fetch("/api/deribit-order", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -491,10 +574,15 @@ function SimulatorInner() {
       if (!res.ok || !data.order_id) throw new Error(`Option order failed: ${data.error}`);
       addComboLog(`Order #${data.order_id.slice(-8)} — ${data.order_state}`);
       if (data.order_state === "filled") {
-        fillWeightedSum += remainingQty * (parseFloat(data.price) || mid);
+        const px = parseFloat(data.price) || mid;
+        fillWeightedSum += remainingQty * px;
         filledSoFar = totalQty;
         if (h) h.filledOpt = totalQty;
         if (progress && progressIdx != null) progress[progressIdx].filled = totalQty;
+        // Once a leg is done its ACTUAL fill fixes the net, so the partner is
+        // bounded by what was really paid rather than by a quote that is no
+        // longer live.
+        if (spreadCtx && spreadRole) spreadCtx.fill[spreadRole === "expensive" ? "exp" : "cheap"] = px;
       }
       return { orderId: data.order_id, mid, filled: data.order_state === "filled" };
     }
@@ -516,9 +604,21 @@ function SimulatorInner() {
         await fetch(`/api/deribit-order?account_id=${accountId}&order_id=${orderId}`, { method: "DELETE" }).catch(() => {});
         throw new Error("Cancelled by user");
       }
-      if (blocking.length && !stallWarned && ++waitTicks >= 30) {  // ~60s at 2s/tick
+      // A spread leg that won't fill is the legging case: its partner may
+      // already be on, leaving half a spread. The rule deliberately refuses to
+      // pay past the band to complete it, so the only remaining lever is the
+      // user's — say so once rather than sitting silent.
+      if (spreadCtx && !stallWarned && ++waitTicks >= 30) {  // ~60s at 2s/tick
         stallWarned = true;
-        addComboLog(`⚠ ${legLabel} has not filled after ~60s — ${blocking.join(", ")} still held. Nothing else in this spread will be placed until it fills; STOP and adjust if needed.`);
+        const partnerFilled = spreadCtx.fill[spreadRole === "expensive" ? "cheap" : "exp"] != null;
+        addComboLog(
+          `⚠ ${legLabel} has not filled after ~60s` +
+          (partnerFilled
+            ? " — its spread partner HAS filled, so you are currently holding half the spread."
+            : " — its spread partner is still working too.") +
+          ` Price is capped by the ${spreadCtx.isDebit ? `${SPREAD_BUY_CAP_PCT * 100}% debit cap` : `${SPREAD_SELL_FLOOR_PCT * 100}% credit floor`}` +
+          `, so it will not chase further. STOP and adjust if you want out.`
+        );
       }
       await sleep(2000);
       if (comboCancelRef.current) {
@@ -550,8 +650,12 @@ function SimulatorInner() {
 
       const tRes  = await fetch(`/api/market?account_id=${accountId}&token=${currency}&action=ticker&instrument=${encodeURIComponent(optInst)}`);
       const tData = await tRes.json();
-      const newMid = tData.mid_price_raw ?? 0;
-      if (newMid > 0 && Math.abs(newMid - mid) > 0.00002) {
+      const rawMid = tData.mid_price_raw ?? 0;
+      // Compare what would ACTUALLY be quoted, not the raw mid — otherwise a
+      // leg already sitting at its bound re-quotes every tick to the same
+      // clamped price, surrendering queue position for nothing.
+      const newMid = spreadBoundedPrice(spreadCtx, spreadRole, rawMid);
+      if (rawMid > 0 && Math.abs(newMid - mid) > 0.00002) {
         addComboLog(`Mid ${mid.toFixed(5)} → ${newMid.toFixed(5)}, re-placing for remaining ${(totalQty - cumFilled).toFixed(4)}`);
         // Confirm the cancel actually went through before placing a
         // replacement — otherwise a failed/late cancel (e.g. the order
@@ -778,65 +882,122 @@ function SimulatorInner() {
       // (optQty 0) contributes nothing, so it can't dilute the ratio.
       const progress = plans.map(p => ({ filled: 0, total: Math.abs(p.optQty) }));
 
-      // Phase 1 — each SPREAD works in parallel, but the legs INSIDE a spread
-      // go in sequence, most expensive premium first.
+      // Phase 1 — a spread's two legs go in TOGETHER, governed by the net
+      // price of the pair rather than by each leg's own premium.
       //
-      // The expensive leg is the one that must not be missed: filling a 3.36
-      // short before its 27.00 long leaves the risky half of the spread naked
-      // at a fraction of the value, and the cheap leg is far easier to fill
-      // afterwards than the expensive one is to chase alone. So the high
-      // premium gets the market to itself, and its partner is only placed once
-      // it has actually filled.
+      // Deribit fills legs independently and its native CS/PS combo
+      // instruments are empty (zero bid, zero ask, zero volume on every
+      // SOL_USDC spread checked), so "together" here means both legs working
+      // at once with their prices bounded so the PAIR stays inside the rule —
+      // a synthetic spread, not an atomic one.
       //
-      // Calls and puts still run concurrently — they are separate spreads, so
-      // holding one behind the other would only add drift for no protection.
-      const premiumOf = (p) => Math.abs(parseFloat(p.leg.form.opt_entry_price) || 0);
+      // Legs with no partner (a naked short, a futures-only leg) have no net
+      // to satisfy and simply go in on their own.
+      const premiumOf   = (p) => Math.abs(parseFloat(p.leg.form.opt_entry_price) || 0);
+      const strikeOf    = (p) => Math.abs(parseFloat(p.leg.form.options_strike) || 0);
+      const isBuyLeg    = (p) => p.optQty > 0;
       const spreadKeyOf = (p) => (p.leg.form.option_type
         || (String(p.leg.type).startsWith("CALL") ? "CALL" : "PUT"));
 
-      const spreads = {};
+      const byType = {};
       plans.forEach((p, idx) => {
-        if (p.optQty === 0) return;               // futures-only leg, nothing to sequence
+        if (p.optQty === 0) return;                 // futures-only leg
         const k = spreadKeyOf(p);
-        (spreads[k] = spreads[k] || []).push({ p, idx });
+        (byType[k] = byType[k] || []).push({ p, idx });
       });
-      // Highest premium first within each spread.
-      Object.values(spreads).forEach(list => list.sort((a, b) => premiumOf(b.p) - premiumOf(a.p)));
 
-      // Pre-seeded so legs skipped (futures-only, or blocked by a failed
-      // partner) still line up with plans by index for phase 2.
+      // Pre-seeded so skipped legs still line up with plans by index in phase 2.
       const optOutcomes = plans.map(() => ({ status: "fulfilled", value: null }));
 
-      Object.entries(spreads).forEach(([k, list]) => {
-        addComboLog(`${k} spread order: ${list.map(({ p }) => `Leg ${p.i + 1} @ ${premiumOf(p)}`).join(" → ")}`);
+      // A pair only counts as a spread when it is genuinely one: same type,
+      // two legs, opposite directions, different strikes. Anything else is
+      // treated as independent legs rather than forced into a net rule that
+      // would not mean anything.
+      const units = [];
+      Object.entries(byType).forEach(([k, list]) => {
+        if (list.length === 2
+            && isBuyLeg(list[0].p) !== isBuyLeg(list[1].p)
+            && strikeOf(list[0].p) !== strikeOf(list[1].p)) {
+          const sorted = [...list].sort((a, b) => premiumOf(b.p) - premiumOf(a.p));
+          units.push({ kind: "spread", label: k, expensive: sorted[0], cheap: sorted[1] });
+        } else {
+          if (list.length > 2) {
+            addComboLog(`${k}: ${list.length} legs — not a single spread, placing each independently (no net rule applied).`);
+          }
+          list.forEach(one => units.push({ kind: "single", label: k, one }));
+        }
       });
 
-      await Promise.all(Object.entries(spreads).map(async ([k, list]) => {
-        for (let n = 0; n < list.length; n++) {
-          const { p, idx } = list[n];
-          const waiting = list.slice(n + 1).map(({ p: q }) => `Leg ${q.i + 1}`);
-          addComboLog(
-            `Leg ${p.i + 1} (${p.leg.type}) premium ${premiumOf(p)}: placing option` +
-            (waiting.length ? ` — ${waiting.join(", ")} held until this fills` : "")
-          );
+      await Promise.all(units.map(async (unit) => {
+        if (unit.kind === "single") {
+          const { p, idx } = unit.one;
+          addComboLog(`Leg ${p.i + 1} (${p.leg.type}): no spread partner — placing on its own.`);
           try {
-            const value = await runLegOptionEntry({
+            optOutcomes[idx] = { status: "fulfilled", value: await runLegOptionEntry({
               accountId: selectedAcct, currency: p.currency, optInst: p.optInst, optQty: p.optQty,
-              h: hedges[idx], legLabel: `Leg ${p.i + 1}`, blocking: waiting,
-              progress, progressIdx: idx,
-            });
-            optOutcomes[idx] = { status: "fulfilled", value };
+              h: hedges[idx], legLabel: `Leg ${p.i + 1}`, progress, progressIdx: idx,
+            }) };
           } catch (e) {
             optOutcomes[idx] = { status: "rejected", reason: e };
-            // Deliberately do NOT place the cheaper leg. Its only purpose is to
-            // offset the expensive one; on its own it is naked risk at a
-            // fraction of the premium, which is worse than not entering.
-            if (waiting.length) {
-              addComboLog(`Leg ${p.i + 1} did not fill (${e.message}) — holding ${waiting.join(", ")}, ${k} spread not entered.`);
-            }
-            break;
           }
+          return;
         }
+
+        const { expensive, cheap, label } = unit;
+        const width = Math.abs(strikeOf(expensive.p) - strikeOf(cheap.p));
+        // Buying the expensive strike means paying the net (a debit); selling
+        // it means receiving the net (a credit). That single fact decides
+        // which side of the band the pair has to stay on.
+        const isDebit = isBuyLeg(expensive.p);
+
+        // Shared price view for the pair. A filled leg's actual fill price
+        // pins the net from then on; until then the live quote stands in.
+        const ctx = {
+          width, isDebit,
+          quote: {}, fill: {},
+          priceOf(role) {
+            const key = role === "expensive" ? "exp" : "cheap";
+            return this.fill[key] != null ? this.fill[key] : this.quote[key];
+          },
+        };
+
+        const entryNet = premiumOf(expensive.p) - premiumOf(cheap.p);
+        const entryPct = width > 0 ? entryNet / width : 0;
+        const okAtEntry = isDebit ? entryPct <= SPREAD_BUY_CAP_PCT : entryPct >= SPREAD_SELL_FLOOR_PCT;
+        addComboLog(
+          `${label} spread ${strikeOf(cheap.p)}/${strikeOf(expensive.p)} width ${width}: ` +
+          `net ${entryNet.toFixed(4)} = ${(entryPct * 100).toFixed(1)}% ` +
+          `(${isDebit ? "debit" : "credit"}, target ${SPREAD_TARGET_PCT * 100}%, ` +
+          `${isDebit ? `cap ${SPREAD_BUY_CAP_PCT * 100}%` : `floor ${SPREAD_SELL_FLOOR_PCT * 100}%`})`
+        );
+
+        if (!okAtEntry) {
+          // Refusing here is the whole point of the rule — entering outside
+          // the band is the trade being wrong, not the execution.
+          const msg = isDebit
+            ? `${label} spread would cost ${(entryPct * 100).toFixed(1)}% of width, above the ${SPREAD_BUY_CAP_PCT * 100}% cap — not entering.`
+            : `${label} spread would only pay ${(entryPct * 100).toFixed(1)}% of width, below the ${SPREAD_SELL_FLOOR_PCT * 100}% floor — not entering.`;
+          addComboLog(`⚠ ${msg}`);
+          [expensive, cheap].forEach(({ idx }) => {
+            optOutcomes[idx] = { status: "rejected", reason: new Error(msg) };
+          });
+          return;
+        }
+
+        addComboLog(`${label} spread: placing both legs together (Leg ${expensive.p.i + 1} + Leg ${cheap.p.i + 1}).`);
+
+        await Promise.all([["expensive", expensive], ["cheap", cheap]].map(async ([role, { p, idx }]) => {
+          try {
+            optOutcomes[idx] = { status: "fulfilled", value: await runLegOptionEntry({
+              accountId: selectedAcct, currency: p.currency, optInst: p.optInst, optQty: p.optQty,
+              h: hedges[idx], legLabel: `Leg ${p.i + 1}`, progress, progressIdx: idx,
+              spreadCtx: ctx, spreadRole: role,
+            }) };
+          } catch (e) {
+            optOutcomes[idx] = { status: "rejected", reason: e };
+            addComboLog(`Leg ${p.i + 1} (${role} leg of the ${label} spread) stopped: ${e.message}`);
+          }
+        }));
       }));
 
       // Phase 2 — finish each leg's hedge against what its option ACTUALLY
@@ -1375,9 +1536,47 @@ function SimulatorInner() {
             <SummaryCard label="Per Day Theta"    value={fmtCcy(combinedPerDayTheta)} color={combinedPerDayTheta >= 0 ? "green" : "red"} />
           </div>
 
+          {/* Scenario clock. Only the Black-Scholes rows move with it — the
+              "Est. Net" figures above are expiry payoffs and have no time
+              value to decay, so they are unaffected by design. */}
+          <div className="mb-4 rounded-lg border border-indigo-100 bg-indigo-50/60 px-4 py-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Scenario day</span>
+              <input
+                type="range" min="0" max={Math.max(0, maxDte)} step="1"
+                value={Math.min(bsDaysFwd, maxDte)}
+                onChange={(e) => setBsDaysFwd(Number(e.target.value))}
+                className="h-1.5 flex-1 min-w-[140px] cursor-pointer accent-indigo-600"
+                disabled={maxDte <= 0}
+              />
+              <input
+                type="number" min="0" max={Math.max(0, maxDte)} step="1"
+                value={bsDaysFwd}
+                onChange={(e) => setBsDaysFwd(Math.max(0, Math.min(maxDte, Number(e.target.value) || 0)))}
+                className="w-20 rounded-lg border border-indigo-200 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
+                disabled={maxDte <= 0}
+              />
+              <span className="text-xs font-semibold text-indigo-700 whitespace-nowrap">
+                {bsDaysFwd <= 0 ? "Today" : bsDaysFwd >= maxDte ? "Expiry day" : `Day ${bsDaysFwd + 1}`}
+                <span className="ml-1 font-normal text-indigo-400">
+                  ({Math.max(0, maxDte - bsDaysFwd)} day{Math.max(0, maxDte - bsDaysFwd) === 1 ? "" : "s"} to expiry)
+                </span>
+              </span>
+              {bsDaysFwd !== 0 && (
+                <button type="button" onClick={() => setBsDaysFwd(0)}
+                  className="rounded border border-indigo-200 bg-white px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50">
+                  Reset to today
+                </button>
+              )}
+            </div>
+            <p className="mt-1.5 text-[11px] text-indigo-400">
+              Rolls the clock forward with price held — the BS rows below show what the structure is worth after that much time decay.
+            </p>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            <ScenarioBlock title="📈 Upside Scenario"   legs={legs} perLeg={upside.byLeg}   totals={upside}   scenario="up"   bsToday={bsUpsideCombined} />
-            <ScenarioBlock title="📉 Downside Scenario" legs={legs} perLeg={downside.byLeg} totals={downside} scenario="down" bsToday={bsDownsideCombined} />
+            <ScenarioBlock title="📈 Upside Scenario"   legs={legs} perLeg={upside.byLeg}   totals={upside}   scenario="up"   bsToday={bsUpsideCombined}   bsLabel={bsLabel} />
+            <ScenarioBlock title="📉 Downside Scenario" legs={legs} perLeg={downside.byLeg} totals={downside} scenario="down" bsToday={bsDownsideCombined} bsLabel={bsLabel} />
           </div>
 
           {/* Side-by-side breakdown table */}
@@ -1901,7 +2100,7 @@ function SummaryCard({ label, value, color }) {
   );
 }
 
-function ScenarioBlock({ title, legs, perLeg, totals, scenario, bsToday }) {
+function ScenarioBlock({ title, legs, perLeg, totals, scenario, bsToday, bsLabel = "Today BS" }) {
   return (
     <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
       <p className="text-xs font-bold text-slate-700 mb-3">{title}</p>
@@ -1928,11 +2127,11 @@ function ScenarioBlock({ title, legs, perLeg, totals, scenario, bsToday }) {
       {bsToday != null && (
         <>
           <div className="flex justify-between pt-2 pb-1 border-b border-dashed border-slate-200">
-            <span className="text-xs font-semibold text-indigo-600">Today BS Opt {scenario === "up" ? "Upside" : "Downside"}</span>
+            <span className="text-xs font-semibold text-indigo-600">{bsLabel} Opt {scenario === "up" ? "Upside" : "Downside"}</span>
             <span className={`text-xs font-semibold ${bsToday >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmtCcy(bsToday)}</span>
           </div>
           <div className="flex justify-between py-1 border-b border-dashed border-slate-200">
-            <span className="text-xs font-semibold text-indigo-600">Today BS Fut {scenario === "up" ? "Upside" : "Downside"}</span>
+            <span className="text-xs font-semibold text-indigo-600">{bsLabel} Fut {scenario === "up" ? "Upside" : "Downside"}</span>
             <span className={`text-xs font-semibold ${totals.fut >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmtCcy(totals.fut)}</span>
           </div>
           <div className="flex justify-between py-1 border-b border-dashed border-slate-200">

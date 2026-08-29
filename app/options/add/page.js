@@ -183,6 +183,8 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   const [exitBadIp,            setExitBadIp]            = useState(false);
   const [exitCrossAfter,       setExitCrossAfter]       = useState("");
   const [exitCrossAfterUnit,   setExitCrossAfterUnit]   = useState("sec");
+  // Desired exit net price per vertical spread, keyed "<C|P>|<expiry>".
+  const [exitSpreadTargets,    setExitSpreadTargets]    = useState({});
 
   async function openExitModal() {
     if (!selectedAcct || !form.token) return;
@@ -1749,12 +1751,15 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
           badIp={exitBadIp}
           crossAfter={exitCrossAfter}
           crossAfterUnit={exitCrossAfterUnit}
+          spreadTargets={exitSpreadTargets}
+          onSpreadTargetChange={(k, v) => setExitSpreadTargets(t => ({ ...t, [k]: v }))}
           onCrossAfterChange={setExitCrossAfter}
           onCrossAfterUnitChange={setExitCrossAfterUnit}
           onConfirm={confirmExitAll}
           onRefresh={openExitModal}
           onClose={() => {
             setExitModalOpen(false);
+            setExitSpreadTargets({});
             setExitCollateralBefore(null);
             setExitFetchedAt(null);
             setExitBadIp(false);

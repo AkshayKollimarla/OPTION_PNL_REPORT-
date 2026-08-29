@@ -10,34 +10,42 @@ export async function GET(request) {
   const account  = (searchParams.get("account")  || "").trim();
   const symbol   = (searchParams.get("symbol")   || "").trim();
 
-  if (!dateFrom || !dateTo) {
-    return NextResponse.json({ error: "date_from and date_to are required." }, { status: 400 });
-  }
+  // No range means the whole history. Requiring both dates made the report
+  // unreachable until two pickers were filled in, even when the wanted answer
+  // was simply "everything".
+  const conditions = [];
+  const params = [];
+  if (dateFrom) { conditions.push("DATE(entry_datetime) >= ?"); params.push(dateFrom); }
+  if (dateTo)   { conditions.push("DATE(entry_datetime) <= ?"); params.push(dateTo); }
 
-  const conditions = [
-    "DATE(entry_datetime) >= ?",
-    "DATE(entry_datetime) <= ?",
-  ];
-  const params = [dateFrom, dateTo];
-
+  // Account and symbol are INDEPENDENT filters, applied together.
+  //
+  // They used to be either/or, on the assumption that an account traded one
+  // symbol so naming the account already pinned it. That stopped being true:
+  // HYPER-USMARKETS alone carries CRCL, HIMS, HOOD, HYPE-USDC and PLTR, so
+  // selecting a symbol did nothing once an account was chosen and the report
+  // silently returned the account's whole book.
   if (account) {
-    // Exact account match — symbol filter is redundant when account is set
     conditions.push("account = ?");
     params.push(account);
-  } else if (symbol) {
-    // No account specified: match all accounts whose name starts with the symbol
-    // e.g. "ETH" matches "ETH-HIDDEN", "ETH-HFT1", etc.
-    conditions.push("account LIKE ?");
+  }
+  if (symbol) {
+    // Prefix match so a base symbol still catches its suffixed instrument
+    // (HYPE matches HYPE-USDC), which the plain symbol list does not carry.
+    conditions.push("token_symbol LIKE ?");
     params.push(`${symbol}%`);
   }
 
-  const where = `WHERE ${conditions.join(" AND ")}`;
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
   try {
     const [rows] = await pool.query(`
       SELECT
         account AS token_name,
-        MAX(token_symbol)                        AS token_symbol,
+        -- Every symbol in the group, not an arbitrary one. MAX() returned
+        -- whichever sorted last (PLTR for an account also holding CRCL),
+        -- labelling the row with a symbol whose numbers it did not represent.
+        GROUP_CONCAT(DISTINCT token_symbol ORDER BY token_symbol SEPARATOR ', ') AS token_symbol,
         SUM(COALESCE(rtps, 0))                   AS rtps,
         AVG(COALESCE(per_hour_rtps, 0))          AS per_hour_rtps,
         SUM(COALESCE(rtp_pnl, 0)) + SUM(COALESCE(rebates, 0)) AS net_pnl,

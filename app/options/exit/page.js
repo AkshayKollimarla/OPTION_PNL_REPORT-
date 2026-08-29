@@ -38,6 +38,10 @@ export default function OptionsExitPage() {
   // Blank = stay maker-only forever (original behavior).
   const [crossAfter,       setCrossAfter]       = useState("");
   const [crossAfterUnit,   setCrossAfterUnit]   = useState("sec");
+  // Desired exit net price per vertical spread, keyed "<C|P>|<expiry>".
+  // Held here rather than inside the dialog so it survives a refresh of the
+  // live position list.
+  const [spreadTargets,    setSpreadTargets]    = useState({});
   const crossAfterSecs = crossAfter === "" || crossAfter == null
     ? null
     : Math.max(0, Math.round(Number(crossAfter))) * (crossAfterUnit === "min" ? 60 : 1);
@@ -226,10 +230,13 @@ export default function OptionsExitPage() {
           crossAfterUnit={crossAfterUnit}
           onCrossAfterChange={setCrossAfter}
           onCrossAfterUnitChange={setCrossAfterUnit}
+          spreadTargets={spreadTargets}
+          onSpreadTargetChange={(k, v) => setSpreadTargets(t => ({ ...t, [k]: v }))}
           onConfirm={confirmExit}
           onRefresh={() => openExit(exitGroup)}
           onClose={() => {
             setExitGroup(null);
+            setSpreadTargets({});
             setCollateralBefore(null);
             setFetchedAt(null);
             setBadIp(false);
