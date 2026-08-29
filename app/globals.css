@@ -2,21 +2,219 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ──────────────────────────────────────────────────────────────────────────
+   Theming
+
+   The dashboard was built with literal Tailwind colour utilities (bg-white,
+   text-slate-400, border-slate-200 …) across ~1,600 occurrences in 23 files.
+   Rather than annotate every one with a dark: variant — a huge diff with a
+   long tail of missed spots — the palette itself is remapped under .dark.
+   One definition per colour, applied everywhere that colour is used, and new
+   pages written in the existing style come out dark-ready with no extra work.
+
+   .dark is set on <html> by the inline script in layout.js before first
+   paint, so there is no flash of the wrong theme on load.
+   ────────────────────────────────────────────────────────────────────────── */
+
 :root {
   color-scheme: light;
+
+  --page: #f5f7fb;
+  --ink: #0f172a;
+  --scrollbar: #cbd5e1;
+
+  /* Chart tokens, consumed by PayoffChart's inline styles so the SVG
+     re-themes with pure CSS and needs no React state of its own. */
+  --chart-bg: #f8fafc;
+  --chart-grid: #e2e8f0;
+  --chart-axis: #cbd5e1;
+  --chart-label: #94a3b8;
+  --chart-caption: #64748b;
+  --chart-legend-bg: #ffffff;
+  --chart-legend-text: #475569;
+  --chart-now: #475569;
+  --chart-marker-ring: #ffffff;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --page: #0b1120;
+  --surface: #141d33;   /* cards, panels — anything that was bg-white     */
+  --surface-2: #0f1729; /* inset rows / page areas that were bg-slate-50  */
+  --surface-3: #1c2740; /* hover + chips, one step brighter than a card   */
+  --border: #263248;
+  --ink: #e8eef7;
+  --scrollbar: #2c3a54;
+
+  --chart-bg: #0f1729;
+  --chart-grid: #1f2a40;
+  --chart-axis: #33415c;
+  --chart-label: #7f8da3;
+  --chart-caption: #9aa8bd;
+  --chart-legend-bg: #141d33;
+  --chart-legend-text: #b8c4d6;
+  --chart-now: #94a3b8;
+  --chart-marker-ring: #141d33;
 }
 
 body {
-  background: #f5f7fb;
-  color: #0f172a;
+  background: var(--page);
+  color: var(--ink);
 }
 
-/* Thin scrollbars to match the dashboard look */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--scrollbar);
   border-radius: 9999px;
 }
+
+/* ── Surfaces ───────────────────────────────────────────────────────────── */
+.dark .bg-white { background-color: var(--surface); }
+.dark .hover\:bg-white:hover { background-color: var(--surface-3); }
+
+.dark .bg-slate-50,
+.dark .bg-slate-50\/40,
+.dark .bg-slate-50\/50,
+.dark .bg-slate-50\/60,
+.dark .bg-slate-50\/80 { background-color: var(--surface-2); }
+
+.dark .hover\:bg-slate-50:hover,
+.dark .hover\:bg-slate-50\/60:hover,
+.dark .hover\:bg-slate-50\/80:hover { background-color: var(--surface-3); }
+
+.dark .bg-slate-100 { background-color: var(--surface-3); }
+.dark .bg-slate-200 { background-color: #2a3752; }
+.dark .bg-slate-700 { background-color: #223049; }
+.dark .bg-slate-800 { background-color: #1a2540; }
+.dark .hover\:bg-slate-800:hover { background-color: #223049; }
+.dark .bg-slate-900 { background-color: #101a2e; }
+
+/* The sidebar is dark in both themes; it only needs to sink a little further
+   so the page beside it still reads as the brighter surface. */
+.dark .bg-navy { background-color: #070d1f; }
+
+/* ── Text ───────────────────────────────────────────────────────────────────
+   Lightness order inverts in dark mode: what was darkest (slate-800) becomes
+   brightest, and slate-400 — the most-used muted label, 126 occurrences —
+   becomes the dimmest while still clearing 4.5:1 against a card. slate-100/
+   200/300 are left alone: they sit on the always-dark sidebar and are already
+   correct there. */
+.dark .text-slate-800,
+.dark .text-slate-700 { color: #e8eef7; }
+.dark .hover\:text-slate-700:hover { color: #f8fafc; }
+.dark .text-slate-600 { color: #c7d2e0; }
+.dark .hover\:text-slate-600:hover { color: #e2e8f0; }
+.dark .text-slate-500 { color: #a3b0c2; }
+.dark .hover\:text-slate-500:hover { color: #cbd5e1; }
+.dark .text-slate-400 { color: #8b97a9; }
+
+/* ── Borders ────────────────────────────────────────────────────────────── */
+.dark .border-slate-50 { border-color: #1a2338; }
+.dark .border-slate-100 { border-color: #1f2a40; }
+.dark .border-slate-200 { border-color: var(--border); }
+.dark .border-slate-300 { border-color: #33415c; }
+.dark .divide-slate-50 > :not([hidden]) ~ :not([hidden]) { border-color: #1a2338; }
+.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) { border-color: #1f2a40; }
+
+/* ── Tinted status blocks ───────────────────────────────────────────────────
+   The -50/-100 tints are near-white and would glare on a dark page, so each
+   becomes a translucent wash of its own hue: the colour coding survives, the
+   block picks up whatever surface sits beneath it, and it stays legible on
+   cards and on the page background alike. */
+.dark .bg-red-50      { background-color: rgba(239, 68, 68, 0.12); }
+.dark .bg-red-100     { background-color: rgba(239, 68, 68, 0.20); }
+.dark .bg-red-500\/10 { background-color: rgba(239, 68, 68, 0.14); }
+.dark .bg-red-500\/20 { background-color: rgba(239, 68, 68, 0.24); }
+.dark .hover\:bg-red-50:hover  { background-color: rgba(239, 68, 68, 0.18); }
+.dark .hover\:bg-red-100:hover { background-color: rgba(239, 68, 68, 0.26); }
+.dark .bg-emerald-50  { background-color: rgba(16, 185, 129, 0.12); }
+.dark .bg-emerald-100 { background-color: rgba(16, 185, 129, 0.20); }
+.dark .bg-green-50    { background-color: rgba(34, 197, 94, 0.12); }
+.dark .bg-blue-50     { background-color: rgba(59, 130, 246, 0.12); }
+.dark .bg-blue-100    { background-color: rgba(59, 130, 246, 0.20); }
+.dark .hover\:bg-blue-100:hover { background-color: rgba(59, 130, 246, 0.26); }
+.dark .bg-indigo-50,
+.dark .bg-indigo-50\/50,
+.dark .bg-indigo-50\/60 { background-color: rgba(99, 102, 241, 0.12); }
+.dark .hover\:bg-indigo-50:hover { background-color: rgba(99, 102, 241, 0.20); }
+.dark .bg-indigo-500\/20 { background-color: rgba(99, 102, 241, 0.24); }
+.dark .bg-indigo-950\/30 { background-color: rgba(30, 27, 75, 0.45); }
+.dark .bg-teal-50     { background-color: rgba(20, 184, 166, 0.12); }
+.dark .bg-teal-100    { background-color: rgba(20, 184, 166, 0.20); }
+.dark .hover\:bg-teal-50:hover { background-color: rgba(20, 184, 166, 0.18); }
+.dark .bg-amber-50    { background-color: rgba(245, 158, 11, 0.12); }
+.dark .bg-yellow-100  { background-color: rgba(234, 179, 8, 0.20); }
+.dark .bg-orange-50   { background-color: rgba(249, 115, 22, 0.12); }
+.dark .bg-orange-100  { background-color: rgba(249, 115, 22, 0.20); }
+.dark .bg-violet-50,
+.dark .bg-violet-50\/30 { background-color: rgba(139, 92, 246, 0.12); }
+.dark .bg-violet-100  { background-color: rgba(139, 92, 246, 0.20); }
+.dark .hover\:bg-violet-50:hover { background-color: rgba(139, 92, 246, 0.18); }
+.dark .bg-purple-50   { background-color: rgba(168, 85, 247, 0.12); }
+.dark .bg-brand\/5    { background-color: rgba(37, 99, 235, 0.10); }
+.dark .bg-brand\/10   { background-color: rgba(37, 99, 235, 0.18); }
+
+.dark .border-red-100     { border-color: rgba(239, 68, 68, 0.28); }
+.dark .border-red-200     { border-color: rgba(239, 68, 68, 0.38); }
+.dark .border-red-500\/30 { border-color: rgba(239, 68, 68, 0.36); }
+.dark .border-emerald-100 { border-color: rgba(16, 185, 129, 0.28); }
+.dark .border-emerald-200 { border-color: rgba(16, 185, 129, 0.38); }
+.dark .border-blue-100    { border-color: rgba(59, 130, 246, 0.28); }
+.dark .border-blue-200    { border-color: rgba(59, 130, 246, 0.38); }
+.dark .border-indigo-100  { border-color: rgba(99, 102, 241, 0.28); }
+.dark .border-indigo-200  { border-color: rgba(99, 102, 241, 0.38); }
+.dark .border-indigo-500\/30 { border-color: rgba(99, 102, 241, 0.36); }
+.dark .border-teal-100    { border-color: rgba(20, 184, 166, 0.28); }
+.dark .border-teal-200    { border-color: rgba(20, 184, 166, 0.38); }
+.dark .border-amber-100   { border-color: rgba(245, 158, 11, 0.28); }
+.dark .border-amber-200   { border-color: rgba(245, 158, 11, 0.38); }
+.dark .border-amber-300   { border-color: rgba(245, 158, 11, 0.48); }
+.dark .border-yellow-200  { border-color: rgba(234, 179, 8, 0.38); }
+.dark .border-orange-200  { border-color: rgba(249, 115, 22, 0.38); }
+.dark .border-orange-300  { border-color: rgba(249, 115, 22, 0.48); }
+.dark .border-violet-50   { border-color: rgba(139, 92, 246, 0.20); }
+.dark .border-violet-100  { border-color: rgba(139, 92, 246, 0.28); }
+.dark .border-violet-200  { border-color: rgba(139, 92, 246, 0.38); }
+.dark .border-purple-100  { border-color: rgba(168, 85, 247, 0.28); }
+
+/* ── Coloured text ──────────────────────────────────────────────────────────
+   The -600/-700/-800 shades are tuned for white backgrounds and go muddy on
+   dark ones, so each steps up to its -400/-300 sibling. P&L green and red
+   matter most: they have to stay instantly tellable apart at a glance. */
+.dark .text-red-700, .dark .text-red-600 { color: #f87171; }
+.dark .text-red-500 { color: #fca5a5; }
+.dark .text-emerald-800, .dark .text-emerald-700, .dark .text-emerald-600 { color: #34d399; }
+.dark .text-emerald-500 { color: #6ee7b7; }
+.dark .text-green-600 { color: #4ade80; }
+.dark .text-blue-700, .dark .text-blue-600 { color: #60a5fa; }
+.dark .text-blue-500 { color: #93c5fd; }
+.dark .hover\:text-blue-700:hover, .dark .hover\:text-blue-600:hover { color: #93c5fd; }
+.dark .text-indigo-700, .dark .text-indigo-600 { color: #818cf8; }
+.dark .text-teal-700, .dark .text-teal-600 { color: #2dd4bf; }
+.dark .text-amber-800, .dark .text-amber-700, .dark .text-amber-600 { color: #fbbf24; }
+.dark .text-yellow-700 { color: #facc15; }
+.dark .text-orange-700, .dark .text-orange-600, .dark .text-orange-500 { color: #fb923c; }
+.dark .text-violet-700, .dark .text-violet-600, .dark .text-violet-500 { color: #a78bfa; }
+.dark .text-purple-700, .dark .text-purple-600 { color: #c084fc; }
+.dark .text-cyan-600 { color: #22d3ee; }
+.dark .text-brand { color: #60a5fa; }
+.dark .hover\:text-brand:hover { color: #93c5fd; }
+.dark .border-brand { border-color: #3b82f6; }
+
+/* Form controls that carry no explicit bg utility. The :not() keeps the
+   deliberately dark instrument picker on its own colour. */
+.dark :where(input, select, textarea):not([class*="bg-"]) {
+  background-color: var(--surface-2);
+  color: var(--ink);
+}
+.dark ::placeholder { color: #6b7891; }
+
+/* Shadows tuned for a light page vanish on a dark one; deepen them so cards
+   keep an edge instead of melting into the background. */
+.dark .shadow-card { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.4); }
+.dark .shadow, .dark .shadow-sm { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45); }
+.dark .shadow-lg, .dark .shadow-xl { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6); }

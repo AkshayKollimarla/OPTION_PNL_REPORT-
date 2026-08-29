@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import ThemeToggle from "./ThemeToggle";
 
 const nav = [
   { href: "/",               label: "Dashboard",      icon: GridIcon   },
@@ -73,6 +74,7 @@ export default function Sidebar() {
       </nav>
 
       <div className="px-3 py-4 border-t border-white/10 space-y-2">
+        <ThemeToggle />
         <button
           onClick={handleLogout}
           className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-300 hover:bg-red-500/20 hover:text-red-300 transition-colors"

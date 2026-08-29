@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import ThemeToggle from "../../components/ThemeToggle";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -33,7 +34,12 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-navy to-slate-800">
+    <div className="relative min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-navy to-slate-800">
+      {/* This screen is dark in either theme, but the choice made here is the
+          one that applies once the dashboard loads. */}
+      <div className="absolute right-5 top-5">
+        <ThemeToggle compact />
+      </div>
       <div className="w-full max-w-sm">
 
         {/* Logo block */}

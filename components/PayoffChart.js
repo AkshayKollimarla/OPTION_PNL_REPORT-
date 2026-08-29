@@ -173,13 +173,13 @@ export default function PayoffChart({ trade }) {
         style={{ height: "auto", maxHeight: 320 }}
       >
         {/* Plot background */}
-        <rect x={PAD.l} y={PAD.t} width={cw} height={ch} fill="#f8fafc" rx="4" />
+        <rect x={PAD.l} y={PAD.t} width={cw} height={ch} style={{ fill: "var(--chart-bg)" }} rx="4" />
 
         {/* Y grid */}
         {yGrid.map((y, i) => (
           <g key={i}>
-            <line x1={PAD.l} y1={yS(y)} x2={PAD.l + cw} y2={yS(y)} stroke="#e2e8f0" strokeWidth="1" />
-            <text x={PAD.l - 6} y={yS(y)} textAnchor="end" dominantBaseline="middle" fontSize="10" fill="#94a3b8">
+            <line x1={PAD.l} y1={yS(y)} x2={PAD.l + cw} y2={yS(y)} style={{ stroke: "var(--chart-grid)" }} strokeWidth="1" />
+            <text x={PAD.l - 6} y={yS(y)} textAnchor="end" dominantBaseline="middle" fontSize="10" style={{ fill: "var(--chart-label)" }}>
               {normalisedTick(y)}
             </text>
           </g>
@@ -188,8 +188,8 @@ export default function PayoffChart({ trade }) {
         {/* X grid */}
         {xGrid.map((x, i) => (
           <g key={i}>
-            <line x1={xS(x)} y1={PAD.t} x2={xS(x)} y2={PAD.t + ch} stroke="#e2e8f0" strokeWidth="1" />
-            <text x={xS(x)} y={PAD.t + ch + 15} textAnchor="middle" fontSize="10" fill="#94a3b8">
+            <line x1={xS(x)} y1={PAD.t} x2={xS(x)} y2={PAD.t + ch} style={{ stroke: "var(--chart-grid)" }} strokeWidth="1" />
+            <text x={xS(x)} y={PAD.t + ch + 15} textAnchor="middle" fontSize="10" style={{ fill: "var(--chart-label)" }}>
               {priceTick(x)}
             </text>
           </g>
@@ -198,7 +198,7 @@ export default function PayoffChart({ trade }) {
         {/* Zero / breakeven line */}
         {zeroInView && (
           <line x1={PAD.l} y1={zeroY} x2={PAD.l + cw} y2={zeroY}
-            stroke="#475569" strokeWidth="1.5" strokeDasharray="5,4" opacity="0.5" />
+            style={{ stroke: "var(--chart-legend-text)" }} strokeWidth="1.5" strokeDasharray="5,4" opacity="0.5" />
         )}
 
         {/* Strike line */}
@@ -230,20 +230,20 @@ export default function PayoffChart({ trade }) {
         {/* Dot at current price on today line */}
         {underlying && S_inRange && T_now > 0 && (
           <>
-            <circle cx={xS(S_now)} cy={yS(todayPnlAtCurrent)} r="5" fill="#0d9488" stroke="white" strokeWidth="2" />
+            <circle cx={xS(S_now)} cy={yS(todayPnlAtCurrent)} r="5" fill="#0d9488" style={{ stroke: "var(--chart-marker-ring)" }} strokeWidth="2" />
           </>
         )}
 
         {/* Axes */}
-        <line x1={PAD.l} y1={PAD.t} x2={PAD.l} y2={PAD.t + ch} stroke="#cbd5e1" strokeWidth="1" />
-        <line x1={PAD.l} y1={PAD.t + ch} x2={PAD.l + cw} y2={PAD.t + ch} stroke="#cbd5e1" strokeWidth="1" />
+        <line x1={PAD.l} y1={PAD.t} x2={PAD.l} y2={PAD.t + ch} style={{ stroke: "var(--chart-axis)" }} strokeWidth="1" />
+        <line x1={PAD.l} y1={PAD.t + ch} x2={PAD.l + cw} y2={PAD.t + ch} style={{ stroke: "var(--chart-axis)" }} strokeWidth="1" />
 
         {/* Axis labels */}
-        <text x={PAD.l + cw / 2} y={H - 4} textAnchor="middle" fontSize="11" fill="#64748b" fontStyle="italic">
+        <text x={PAD.l + cw / 2} y={H - 4} textAnchor="middle" fontSize="11" style={{ fill: "var(--chart-caption)" }} fontStyle="italic">
           Underlying price
         </text>
         <text
-          x={14} y={PAD.t + ch / 2} textAnchor="middle" fontSize="11" fill="#64748b"
+          x={14} y={PAD.t + ch / 2} textAnchor="middle" fontSize="11" style={{ fill: "var(--chart-caption)" }}
           transform={`rotate(-90,14,${PAD.t + ch / 2})`}
         >
           P/L
@@ -251,19 +251,19 @@ export default function PayoffChart({ trade }) {
 
         {/* Legend */}
         <g transform={`translate(${PAD.l + cw - 310}, ${PAD.t + 8})`}>
-          <rect x="0" y="0" width="300" height="22" fill="white" rx="3" stroke="#e2e8f0" />
+          <rect x="0" y="0" width="300" height="22" rx="3" style={{ fill: "var(--chart-legend-bg)", stroke: "var(--chart-grid)" }} />
           <line x1="8" y1="11" x2="26" y2="11" stroke="#f97316" strokeWidth="2.5" />
-          <text x="30" y="15" fontSize="10" fill="#475569">Expiry P/L</text>
+          <text x="30" y="15" fontSize="10" style={{ fill: "var(--chart-legend-text)" }}>Expiry P/L</text>
           {T_now > 0 && (
             <>
               <line x1="108" y1="11" x2="126" y2="11" stroke="#0d9488" strokeWidth="2.5" />
-              <text x="130" y="15" fontSize="10" fill="#475569">Today P/L ({daysLeft}d)</text>
+              <text x="130" y="15" fontSize="10" style={{ fill: "var(--chart-legend-text)" }}>Today P/L ({daysLeft}d)</text>
             </>
           )}
           {daysLeft > 1 && (
             <>
               <line x1="218" y1="11" x2="236" y2="11" stroke="#3b82f6" strokeWidth="2" strokeDasharray="5,3" />
-              <text x="240" y="15" fontSize="10" fill="#475569">1-day P/L</text>
+              <text x="240" y="15" fontSize="10" style={{ fill: "var(--chart-legend-text)" }}>1-day P/L</text>
             </>
           )}
         </g>
