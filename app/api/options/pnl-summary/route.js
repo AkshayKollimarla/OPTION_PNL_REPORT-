@@ -3,7 +3,7 @@ import optionsPool from "../../../../lib/options-db";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/options/pnl-summary?from=YYYY-MM-DD&to=YYYY-MM-DD
+// GET /api/options/pnl-summary?from=&to=&exchange=&base=&account=
 //   → { bookedPnl, closedCount, openCount, totalCount }
 //
 // Aggregated in SQL rather than by summing a page of rows in the browser:
@@ -18,6 +18,10 @@ export async function GET(request) {
   const sp = new URL(request.url).searchParams;
   const from = sp.get("from");
   const to = sp.get("to");
+  const exchange = (sp.get("exchange") || "").trim();
+  const account = (sp.get("account") || "").trim();
+  // Base token, already normalised by the caller: BTC-PERPETUAL → BTC.
+  const base = (sp.get("base") || "").trim();
 
   const where = [];
   const params = [];
@@ -28,6 +32,31 @@ export async function GET(request) {
   if (to) {
     where.push("entry_date <= ?");
     params.push(to);
+  }
+  if (base) {
+    // Underscores fold to dashes so SOL_USDC reduces to the same base as
+    // SOL-HFT1-…, matching how the rest of the app treats the pair.
+    where.push("SUBSTRING_INDEX(REPLACE(token, '_', '-'), '-', 1) = ?");
+    params.push(base);
+  }
+  if (account === "none") {
+    // The caller asked for an account that has no options counterpart. Say so
+    // with an empty result rather than silently reporting the whole book,
+    // which would look like the filter had been ignored.
+    where.push("1 = 0");
+  } else if (account) {
+    where.push("account_id = ?");
+    params.push(account);
+  }
+  if (exchange) {
+    // The linked account is authoritative for venue; the token is only a
+    // fallback for rows that predate account linking.
+    where.push(
+      `(account_id IN (SELECT id FROM trading_accounts WHERE UPPER(exchange) = ?)
+        OR (account_id IS NULL AND SUBSTRING_INDEX(REPLACE(token, '_', '-'), '-', 1) IN ('BTC','ETH','SOL')
+            AND ? = 'DERIBIT'))`
+    );
+    params.push(exchange.toUpperCase(), exchange.toUpperCase());
   }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 

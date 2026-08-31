@@ -89,6 +89,37 @@ export default function Dashboard() {
   const [truncated, setTruncated] = useState(false);
   // Booked P&L from the options book, aggregated server-side.
   const [optionsPnl, setOptionsPnl] = useState(null);
+  const [optAccounts, setOptAccounts] = useState([]);   // options-side accounts
+
+  // Translate this page's bot-side filters into the options book's own terms.
+  //
+  // A bot account name encodes BOTH a coin and an options account —
+  // "BTC-HFT3" is BTC on HFT3, "ETH-HIDDEN" is ETH on HIDDEN-ROAD — because
+  // the grid bot runs one coin per account while the options account holds
+  // several. So one bot account maps to an (account, coin) pair, except
+  // HYPER-USMARKETS which exists verbatim on both sides.
+  const optionsFilterFor = useCallback((sym, acct, optAccts) => {
+    const baseOf = (v) => String(v || "").split("_").join("-").split("-")[0].toUpperCase();
+    const out = {};
+    if (sym) out.base = baseOf(sym);
+
+    if (acct) {
+      const exact = optAccts.find((a) => a.name === acct);
+      if (exact) {
+        out.account = String(exact.id);
+      } else {
+        const dash = acct.indexOf("-");
+        const coin = dash > 0 ? acct.slice(0, dash) : "";
+        const hint = dash > 0 ? acct.slice(dash + 1) : acct;
+        const match = optAccts.find((a) => String(a.name).startsWith(hint));
+        // No options counterpart: report nothing rather than the whole book,
+        // which would look like the filter had been ignored.
+        out.account = match ? String(match.id) : "none";
+        if (coin && !out.base) out.base = baseOf(coin);
+      }
+    }
+    return out;
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -122,13 +153,17 @@ export default function Dashboard() {
       setSymbolExchange(json.symbolExchange || {});
       setAccountExchange(json.accountExchange || {});
 
-      // Options strategies live in their own database with their own token and
-      // account naming, so only the date range carries across cleanly. Symbol
-      // and account are deliberately not forwarded: "SOL-USDC-PERPETUAL" here
-      // is "SOL_USDC" there, and a near-miss would silently read as zero.
+      // Every filter now carries across. The two sides name things
+      // differently — "SOL-USDC-PERPETUAL" here is "SOL_USDC" there, and
+      // "BTC-HFT3" here is HFT3 there — so the terms are translated rather
+      // than passed through.
       const oq = new URLSearchParams();
       if (from) oq.set("from", from);
       if (from || to) oq.set("to", to || from);
+      if (exchange) oq.set("exchange", exchange);
+      const optFilter = optionsFilterFor(symbol, account, optAccounts);
+      if (optFilter.base) oq.set("base", optFilter.base);
+      if (optFilter.account) oq.set("account", optFilter.account);
       const ores = await fetch(`/api/options/pnl-summary?${oq.toString()}`, { cache: "no-store" });
       setOptionsPnl(ores.ok ? await ores.json() : null);
     } catch (e) {
@@ -136,11 +171,20 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [symbol, account, exchange, from, to]);
+  }, [symbol, account, exchange, from, to, optAccounts, optionsFilterFor]);
 
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The options book keeps its own account rows, needed to translate a bot
+  // account into the options account it corresponds to.
+  useEffect(() => {
+    fetch("/api/accounts", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => setOptAccounts(j.accounts || []))
+      .catch(() => {});
   }, []);
 
   const e = entry || {};
