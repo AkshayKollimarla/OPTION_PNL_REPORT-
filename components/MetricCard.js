@@ -1,18 +1,17 @@
-import Sparkline from "./Sparkline";
 import { formatValue } from "../lib/fields";
 
 const COLORS = {
-  blue:   { text: "text-blue-600",    bg: "bg-blue-50",    stroke: "#3b82f6" },
-  green:  { text: "text-emerald-600", bg: "bg-emerald-50", stroke: "#10b981" },
-  purple: { text: "text-purple-600",  bg: "bg-purple-50",  stroke: "#8b5cf6" },
-  orange: { text: "text-orange-500",  bg: "bg-orange-50",  stroke: "#f97316" },
-  indigo: { text: "text-indigo-600",  bg: "bg-indigo-50",  stroke: "#6366f1" },
-  teal:   { text: "text-teal-600",    bg: "bg-teal-50",    stroke: "#14b8a6" },
-  red:    { text: "text-red-600",     bg: "bg-red-50",     stroke: "#ef4444" },
+  blue:   { text: "text-blue-600",    bg: "bg-blue-50" },
+  green:  { text: "text-emerald-600", bg: "bg-emerald-50" },
+  purple: { text: "text-purple-600",  bg: "bg-purple-50" },
+  orange: { text: "text-orange-500",  bg: "bg-orange-50" },
+  indigo: { text: "text-indigo-600",  bg: "bg-indigo-50" },
+  teal:   { text: "text-teal-600",    bg: "bg-teal-50" },
+  red:    { text: "text-red-600",     bg: "bg-red-50" },
 };
 
 // signAware=true → override color to red when value < 0
-export default function MetricCard({ label, value, format, color = "blue", signAware = false }) {
+export default function MetricCard({ label, value, format, color = "blue", signAware = false, sub = "" }) {
   const isNegative = signAware && value !== null && value !== undefined && value !== "" && Number(value) < 0;
   const c = COLORS[isNegative ? "red" : color] || COLORS.blue;
   return (
@@ -24,9 +23,7 @@ export default function MetricCard({ label, value, format, color = "blue", signA
         <span className="text-xs font-medium text-slate-500">{label}</span>
       </div>
       <div className={`text-xl font-bold ${c.text}`}>{formatValue(value, format)}</div>
-      <div className="mt-2">
-        <Sparkline seed={label} color={c.stroke} />
-      </div>
+      {sub && <div className="mt-1 text-xs text-slate-400">{sub}</div>}
     </div>
   );
 }

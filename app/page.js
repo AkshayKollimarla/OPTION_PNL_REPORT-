@@ -87,6 +87,8 @@ export default function Dashboard() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [truncated, setTruncated] = useState(false);
+  // Booked P&L from the options book, aggregated server-side.
+  const [optionsPnl, setOptionsPnl] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -119,6 +121,16 @@ export default function Dashboard() {
       setExchanges(json.exchanges || []);
       setSymbolExchange(json.symbolExchange || {});
       setAccountExchange(json.accountExchange || {});
+
+      // Options strategies live in their own database with their own token and
+      // account naming, so only the date range carries across cleanly. Symbol
+      // and account are deliberately not forwarded: "SOL-USDC-PERPETUAL" here
+      // is "SOL_USDC" there, and a near-miss would silently read as zero.
+      const oq = new URLSearchParams();
+      if (from) oq.set("from", from);
+      if (from || to) oq.set("to", to || from);
+      const ores = await fetch(`/api/options/pnl-summary?${oq.toString()}`, { cache: "no-store" });
+      setOptionsPnl(ores.ok ? await ores.json() : null);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -207,6 +219,20 @@ export default function Dashboard() {
             }
             small={isSummary ? "avg per entry" : ""}
             icon="💰"
+          />
+
+          {/* Options P&L — the options strategy book, not the grid bot */}
+          <MetricCard
+            label="Options PnL"
+            value={optionsPnl ? optionsPnl.bookedPnl : null}
+            format="currency"
+            color="teal"
+            signAware
+            sub={
+              optionsPnl
+                ? `${optionsPnl.closedCount} closed${optionsPnl.openCount ? ` · ${optionsPnl.openCount} open` : ""}`
+                : ""
+            }
           />
 
           {METRIC_CARDS.map((f) => (
