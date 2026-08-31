@@ -17,6 +17,14 @@ export default function OptionsDashboard() {
   const [search,     setSearch]     = useState("");
   const [dateFrom,   setDateFrom]   = useState("");
   const [dateTo,     setDateTo]     = useState("");
+  const [exchange,   setExchange]   = useState("all");
+  const [account,    setAccount]    = useState("all");
+  const [accountList, setAccountList] = useState([]);   // [{id, name, exchange}]
+  // Token -> exchange comes from the bot side, which is the only place that
+  // records which venue a coin trades on. Every options account is registered
+  // as "deribit", so the account table alone cannot tell DERIBIT from
+  // HYPERLIQUID here.
+  const [botMeta, setBotMeta] = useState({ exchanges: [], symbolExchange: {} });
   const [page,       setPage]       = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total,      setTotal]      = useState(0);
@@ -25,13 +33,18 @@ export default function OptionsDashboard() {
   const [confirmId,  setConfirmId]  = useState(null);
   const [deletingId, setDeletingId] = useState(null);
 
-  const load = useCallback((status, tokenQ, from, to, pg) => {
+  const load = useCallback((status, tokenQ, from, to, pg, acct, bases) => {
     setLoading(true);
     const qs = new URLSearchParams();
     if (status !== "all") qs.set("status", status);
     if (tokenQ)  qs.set("token",     tokenQ);
     if (from)    qs.set("date_from", from);
     if (to)      qs.set("date_to",   to);
+    if (acct && acct !== "all") qs.set("account", acct);
+    // Filtering has to happen server-side: the table is paginated, so
+    // narrowing the 50 rows already fetched would hide matches on other pages
+    // and quietly understate the totals.
+    if (bases && bases.length) qs.set("bases", bases.join(","));
     qs.set("page",  pg);
     qs.set("limit", PAGE_SIZE);
 
@@ -55,19 +68,53 @@ export default function OptionsDashboard() {
         const map = {};
         for (const a of d.accounts || []) map[a.id] = a.name || String(a.id);
         setAcctMap(map);
+        setAccountList(d.accounts || []);
       })
       .catch(() => {});
   }, []);
 
+  // limit=1: only the metadata lists are wanted, and the endpoint builds those
+  // from the whole table regardless of the row limit.
+  useEffect(() => {
+    fetch("/api/entries?limit=1", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => setBotMeta({
+        exchanges: j.exchanges || [],
+        symbolExchange: j.symbolExchange || {},
+      }))
+      .catch(() => {});
+  }, []);
+
+  // Base tokens belonging to the chosen exchange, e.g. DERIBIT -> BTC, ETH,
+  // SOL. Sent to the API so it can filter across every page, not just this one.
+  const exchangeBases = useMemo(() => {
+    if (exchange === "all") return [];
+    return [...new Set(
+      Object.entries(botMeta.symbolExchange)
+        .filter(([, ex]) => ex === exchange)
+        .map(([sym]) => String(sym).split("_").join("-").split("-")[0])
+    )];
+  }, [exchange, botMeta.symbolExchange]);
+
+  // Accounts are registered against a venue, so only that venue's accounts are
+  // offerable. Picking an exchange with no registered account leaves just
+  // "All accounts", which is the honest answer rather than a list that returns
+  // nothing.
+  const visibleAccounts = useMemo(() => (
+    exchange === "all"
+      ? accountList
+      : accountList.filter((a) => String(a.exchange || "").toUpperCase() === exchange)
+  ), [accountList, exchange]);
+
   // Reset to page 1 whenever filters change
   useEffect(() => {
     setPage(1);
-    load(filter, search, dateFrom, dateTo, 1);
-  }, [filter, search, dateFrom, dateTo, load]);
+    load(filter, search, dateFrom, dateTo, 1, account, exchangeBases);
+  }, [filter, search, dateFrom, dateTo, account, exchangeBases, load]);
 
   // Load new page without resetting
   useEffect(() => {
-    load(filter, search, dateFrom, dateTo, page);
+    load(filter, search, dateFrom, dateTo, page, account, exchangeBases);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 
@@ -121,9 +168,10 @@ export default function OptionsDashboard() {
 
   function clearFilters() {
     setSearch(""); setDateFrom(""); setDateTo(""); setFilter("all");
+    setExchange("all"); setAccount("all");
   }
 
-  const hasFilters = search || dateFrom || dateTo || filter !== "all";
+  const hasFilters = search || dateFrom || dateTo || filter !== "all" || exchange !== "all" || account !== "all";
 
   return (
     <div>
@@ -165,6 +213,39 @@ export default function OptionsDashboard() {
               </button>
             ))}
           </div>
+
+          {/* Exchange */}
+          <select
+            value={exchange}
+            onChange={(e) => {
+              const next = e.target.value;
+              setExchange(next);
+              // Drop an account that belongs to another venue, or the two
+              // filters contradict and the table comes back empty with nothing
+              // explaining why.
+              if (next !== "all" && account !== "all") {
+                const a = accountList.find((x) => String(x.id) === String(account));
+                if (!a || String(a.exchange || "").toUpperCase() !== next) setAccount("all");
+              }
+            }}
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand focus:outline-none"
+          >
+            <option value="all">All exchanges</option>
+            {botMeta.exchanges.map((x) => <option key={x} value={x}>{x}</option>)}
+          </select>
+
+          {/* Account */}
+          <select
+            value={account}
+            onChange={(e) => setAccount(e.target.value)}
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand focus:outline-none"
+          >
+            <option value="all">All accounts</option>
+            {visibleAccounts.map((a) => (
+              <option key={a.id} value={a.id}>{a.name || a.id}</option>
+            ))}
+            <option value="none">— Not linked —</option>
+          </select>
 
           {/* Token search */}
           <div className="relative">

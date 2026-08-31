@@ -42,6 +42,12 @@ export async function GET(request) {
   const token   = (searchParams.get("token") || "").trim();
   const dateFrom= searchParams.get("date_from") || "";
   const dateTo  = searchParams.get("date_to")   || "";
+  const account = (searchParams.get("account") || "").trim();
+  // Comma-separated base tokens. The caller supplies them because the mapping
+  // from token to exchange lives in the OTHER database (bot_entries), and this
+  // endpoint should not reach across a database boundary to answer a filter.
+  const bases   = (searchParams.get("bases") || "")
+    .split(",").map((b) => b.trim()).filter(Boolean);
 
   // Pagination (ignored when fetching by group_id)
   const page  = Math.max(1, parseInt(searchParams.get("page")  || "1", 10));
@@ -71,6 +77,22 @@ export async function GET(request) {
     if (dateTo) {
       conditions.push("entry_date <= ?");
       params.push(dateTo);
+    }
+    if (account === "none") {
+      // Older strategies predate account linking; being able to isolate them
+      // is the point of offering this at all.
+      conditions.push("account_id IS NULL");
+    } else if (account) {
+      conditions.push("account_id = ?");
+      params.push(account);
+    }
+    if (bases.length) {
+      // Underscores are folded to dashes first so SOL_USDC reduces to the same
+      // base as SOL-HFT1-..., matching how the rest of the app treats them.
+      conditions.push(
+        `SUBSTRING_INDEX(REPLACE(token, '_', '-'), '-', 1) IN (${bases.map(() => "?").join(", ")})`
+      );
+      params.push(...bases);
     }
   }
 
