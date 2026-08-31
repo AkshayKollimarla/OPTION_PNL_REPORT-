@@ -759,14 +759,53 @@ export default function OptionsAnalysis() {
 
             {/* Results */}
             {cumBot && (() => {
-              // Aggregate options PNL by base token
+              // Aggregate options PNL by base token.
+              //
+              // A combined structure is ONE strategy spread over several rows
+              // that share a group_id — a 4-leg iron condor is one position,
+              // not four. Counting rows made a token look four times as busy
+              // as it was. P&L still sums across every leg, because the
+              // structure's result is the sum of its legs; only the count and
+              // the investment collapse to the group.
               const optByToken = {};
+              const seenGroups = new Set();
               cumOpts.forEach((t) => {
                 const sym = baseToken(t.token);
-                if (!optByToken[sym]) optByToken[sym] = 0;
-                optByToken[sym] += Number(t.net_booked_pnl || 0);
+                if (!optByToken[sym]) {
+                  optByToken[sym] = { pnl: 0, strategies: 0, invSum: 0, invCount: 0 };
+                }
+                const b = optByToken[sym];
+                b.pnl += Number(t.net_booked_pnl || 0);
+
+                // A row with no group_id is a standalone one-leg strategy and
+                // always counts. A grouped row counts only the first time its
+                // group is seen.
+                const gid = t.group_id == null ? null : String(t.group_id);
+                const isNewStrategy = gid === null || !seenGroups.has(gid);
+                if (gid !== null) seenGroups.add(gid);
+                if (isNewStrategy) {
+                  b.strategies += 1;
+                  // Capital behind the strategy. Every leg of a group carries
+                  // the same figure, so it is taken once per strategy — adding
+                  // it per leg would inflate a 4-leg structure fourfold.
+                  const inv = Number(t.investment);
+                  if (Number.isFinite(inv) && inv > 0) {
+                    b.invSum += inv;
+                    b.invCount += 1;
+                  }
+                }
               });
-              const totalOptPnl = Object.values(optByToken).reduce((a, b) => a + b, 0);
+
+              // Investment is the capital standing behind the token, so it
+              // averages across that token's strategies rather than summing:
+              // the same account balance is redeployed trade after trade, and
+              // adding it up would report the balance many times over.
+              Object.values(optByToken).forEach((b) => {
+                b.investment = b.invCount ? b.invSum / b.invCount : null;
+              });
+
+              const totalOptPnl = Object.values(optByToken).reduce((a, b) => a + b.pnl, 0);
+              const totalStrategies = Object.values(optByToken).reduce((a, b) => a + b.strategies, 0);
 
               return (
                 <>
@@ -828,27 +867,33 @@ export default function OptionsAnalysis() {
                     <div className="rounded-xl border border-teal-100 bg-white p-5 shadow-card">
                       <h3 className="text-sm font-bold text-slate-700 mb-4">
                         Options PNL by Token
-                        <span className="ml-2 text-xs font-normal text-slate-400">{cumOpts.length} strategies</span>
+                        <span className="ml-2 text-xs font-normal text-slate-400">
+                          {totalStrategies} strateg{totalStrategies === 1 ? "y" : "ies"}
+                          <span className="ml-1">({cumOpts.length} legs)</span>
+                        </span>
                       </h3>
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm border-collapse">
                           <thead>
                             <tr className="border-b border-slate-200">
-                              {["Token","Strategies","Net Booked PNL"].map((h) => (
+                              {["Token","Strategies","Investment","Net Booked PNL"].map((h) => (
                                 <th key={h} className={`py-2 px-3 text-xs font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap ${h === "Token" ? "text-left" : "text-right"}`}>{h}</th>
                               ))}
                             </tr>
                           </thead>
                           <tbody>
-                            {Object.entries(optByToken).sort((a,b) => b[1]-a[1]).map(([sym, pnl]) => (
+                            {Object.entries(optByToken).sort((a, b) => b[1].pnl - a[1].pnl).map(([sym, b]) => (
                               <tr key={sym} className="border-b border-dashed border-slate-100 last:border-0 hover:bg-slate-50/60">
                                 <td className="py-2.5 px-3 text-sm font-semibold text-teal-700">{sym}</td>
-                                <td className="py-2.5 px-3 text-right text-sm text-slate-600">{cumOpts.filter(t => baseToken(t.token) === sym).length}</td>
-                                <td className={`py-2.5 px-3 text-right text-sm font-bold ${pnl >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(pnl)}</td>
+                                <td className="py-2.5 px-3 text-right text-sm text-slate-600">{b.strategies}</td>
+                                <td className="py-2.5 px-3 text-right text-sm text-slate-600">
+                                  {b.investment != null ? fmtCcy(b.investment) : "—"}
+                                </td>
+                                <td className={`py-2.5 px-3 text-right text-sm font-bold ${b.pnl >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(b.pnl)}</td>
                               </tr>
                             ))}
                             <tr className="border-t-2 border-slate-200 bg-slate-50 font-bold">
-                              <td className="py-2.5 px-3 text-sm text-slate-700" colSpan={2}>TOTAL</td>
+                              <td className="py-2.5 px-3 text-sm text-slate-700" colSpan={3}>TOTAL</td>
                               <td className={`py-2.5 px-3 text-right text-sm font-bold ${totalOptPnl >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(totalOptPnl)}</td>
                             </tr>
                           </tbody>
