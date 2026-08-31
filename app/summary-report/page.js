@@ -19,6 +19,10 @@ export default function SummaryReport() {
   const [date,      setDate]      = useState("");
   const [symbol,    setSymbol]    = useState("all");
   const [symbols,   setSymbols]   = useState([]);
+  const [exchange,  setExchange]  = useState("all");
+  const [exchanges, setExchanges] = useState([]);
+  // symbol -> exchange, so choosing an exchange narrows the Symbol list
+  const [symbolExchange, setSymbolExchange] = useState({});
   const [sortCol,   setSortCol]   = useState("net_pnl");
   const [sortDir,   setSortDir]   = useState("desc");
   const [loading,   setLoading]   = useState(true);
@@ -30,16 +34,19 @@ export default function SummaryReport() {
     const p = new URLSearchParams();
     if (date)                    p.set("date",   date);
     if (symbol && symbol !== "all") p.set("symbol", symbol);
+    if (exchange && exchange !== "all") p.set("exchange", exchange);
     fetch(`/api/summary-report?${p}`)
       .then((r) => r.json())
       .then((j) => {
         if (j.error) throw new Error(j.error);
         setData(j);
         setSymbols(j.symbols || []);
+        setExchanges(j.exchanges || []);
+        setSymbolExchange(j.symbolExchange || {});
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [date, symbol]);
+  }, [date, symbol, exchange]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -68,7 +75,7 @@ export default function SummaryReport() {
         )}
 
         {/* Filters */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {/* Date */}
           <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
             <span className="text-slate-400">
@@ -91,6 +98,34 @@ export default function SummaryReport() {
             )}
           </div>
 
+          {/* Exchange */}
+          <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <span className="text-slate-400">
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 7h13l-3-3M21 17H8l3 3" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-slate-400">Exchange</p>
+              <select
+                value={exchange}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setExchange(next);
+                  // Clear a symbol from a different exchange, or the two
+                  // filters contradict and the table comes back empty.
+                  if (next !== "all" && symbol !== "all" && symbolExchange[symbol] !== next) setSymbol("all");
+                }}
+                className="text-sm font-semibold text-slate-700 bg-transparent outline-none w-full"
+              >
+                <option value="all">All Exchanges</option>
+                {exchanges.map((x) => (
+                  <option key={x} value={x}>{x}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           {/* Symbol */}
           <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
             <span className="text-slate-400">
@@ -107,7 +142,7 @@ export default function SummaryReport() {
                 className="text-sm font-semibold text-slate-700 bg-transparent outline-none w-full"
               >
                 <option value="all">All Symbols</option>
-                {symbols.map((s) => (
+                {symbols.filter((s) => exchange === "all" || symbolExchange[s] === exchange).map((s) => (
                   <option key={s} value={s}>{s}</option>
                 ))}
               </select>

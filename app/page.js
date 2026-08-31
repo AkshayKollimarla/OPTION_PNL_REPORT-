@@ -31,9 +31,35 @@ function summarize(entries) {
   const phSum = entries.reduce((acc, e) => acc + Number(e.per_hour_rtps || 0), 0);
   result.per_hour_rtps = phSum / entries.length;
 
-  // APY = (sum of net_pnl / investment) × 365 × 100  — use latest investment
-  const investment = Number(latest.investment || 0);
-  result.apy = investment ? (result.net_pnl / investment) * 365 * 100 : 0;
+  // Which tokens actually went into this total. Without it the Token card
+  // shows whichever coin happened to be newest, which reads as though the
+  // whole summary belonged to that one coin.
+  result._tokens = [...new Set(entries.map((e) => e.token_symbol).filter(Boolean))];
+
+  // Capital backing the total. Investments are per-entry snapshots of the same
+  // capital, so they average rather than sum — adding 193 daily rows would
+  // count the same money 193 times.
+  const invEntries = entries.filter((e) => Number(e.investment) > 0);
+  const avgInvestment = invEntries.length
+    ? invEntries.reduce((acc, e) => acc + Number(e.investment), 0) / invEntries.length
+    : 0;
+  result._avgInvestment = avgInvestment;
+
+  // Days actually covered, inclusive, so a one-day range is 1 and not 0.
+  const msPerDay = 86400000;
+  const spanDays = Math.max(
+    1,
+    Math.round((new Date(latest.entry_datetime) - new Date(oldest.entry_datetime)) / msPerDay) + 1
+  );
+  result._days = spanDays;
+
+  // Annualise over the period the entries actually cover. The old form
+  // multiplied the whole range's P&L by 365 as if it had been earned in a
+  // single day, which was survivable while summaries were opt-in but reads as
+  // a five-figure APY now that the unfiltered dashboard is a summary.
+  result.apy = avgInvestment
+    ? (result.net_pnl / avgInvestment) * (365 / spanDays) * 100
+    : 0;
 
   result._isSummary = true;
   result._count = entries.length;
@@ -52,8 +78,15 @@ export default function Dashboard() {
   const [symbols, setSymbols] = useState([]);
   const [account, setAccount] = useState("");
   const [accounts, setAccounts] = useState([]);
+  const [exchange, setExchange] = useState("");
+  const [exchanges, setExchanges] = useState([]);
+  // symbol -> exchange / account -> exchange, so picking an exchange can
+  // narrow the other two dropdowns without another round trip.
+  const [symbolExchange, setSymbolExchange] = useState({});
+  const [accountExchange, setAccountExchange] = useState({});
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [truncated, setTruncated] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,25 +95,36 @@ export default function Dashboard() {
       const qs = new URLSearchParams();
       if (symbol) qs.set("symbol", symbol);
       if (account) qs.set("account", account);
+      if (exchange) qs.set("exchange", exchange);
       if (from) qs.set("from", from);
       if (to)   qs.set("to", to);
       // Single date selected: treat as exact day (from 00:00 to 23:59)
       if (from && !to) qs.set("to", from);
-      const res = await fetch(`/api/entries?${qs.toString()}`);
+      // The cards aggregate whatever comes back, so ask for the full history
+      // rather than the default page. `truncated` below reports honestly if
+      // even this is not everything.
+      qs.set("limit", "1000");
+      const res = await fetch(`/api/entries?${qs.toString()}`, { cache: "no-store" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to load");
       const entries = json.entries || [];
-      // Summarise only when the user has selected BOTH a from and to date
-      const shouldSummarise = !!(from && to);
-      setEntry(shouldSummarise ? summarize(entries) : (entries[0] ? { ...entries[0], _isSummary: false, _count: 1 } : null));
+      // Always aggregate the matching set. Previously this summarised only
+      // when BOTH dates were set, so the unfiltered dashboard showed a single
+      // newest row — one coin's numbers presented as if they were the whole
+      // account. summarize() returns the row unchanged when there is only one.
+      setEntry(summarize(entries));
+      setTruncated(!!json.truncated);
       setSymbols(json.symbols || []);
       setAccounts(json.accounts || []);
+      setExchanges(json.exchanges || []);
+      setSymbolExchange(json.symbolExchange || {});
+      setAccountExchange(json.accountExchange || {});
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [symbol, account, from, to]);
+  }, [symbol, account, exchange, from, to]);
 
   useEffect(() => {
     load();
@@ -107,10 +151,19 @@ export default function Dashboard() {
           </div>
         )}
 
+        {truncated && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
+            More than 1,000 entries match this filter. The totals below cover the
+            1,000 most recent only — narrow the date range for exact figures.
+          </div>
+        )}
+
         {isSummary && (
           <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-700">
-            Showing summary across <strong>{e._count} entries</strong> —{" "}
-            {SUM_KEYS.size} metrics summed, Per Hour RTPS averaged, APY recalculated.
+            Showing summary across <strong>{e._count} entries</strong> over{" "}
+            <strong>{e._days} day{e._days === 1 ? "" : "s"}</strong> —{" "}
+            {SUM_KEYS.size} metrics summed, Per Hour RTPS averaged, APY annualised
+            over the period against average investment.
           </div>
         )}
 
@@ -139,17 +192,29 @@ export default function Dashboard() {
 
           {/* Token card */}
           <InfoCard
-            label="Token Name"
-            big={e.token_name || "—"}
-            small={e.token_symbol || ""}
+            label={isSummary ? "Tokens" : "Token Name"}
+            big={
+              isSummary
+                ? `${(e._tokens || []).length} token${(e._tokens || []).length === 1 ? "" : "s"}`
+                : e.token_name || "—"
+            }
+            small={isSummary ? (e._tokens || []).join(", ") : e.token_symbol || ""}
             icon="◎"
           />
 
           {/* Investment card */}
           <InfoCard
             label="Investment"
-            big={e.investment != null && e.investment !== "" ? formatValue(e.investment, "currency") : "—"}
-            small={isSummary ? "latest entry" : ""}
+            big={
+              isSummary
+                ? e._avgInvestment
+                  ? formatValue(e._avgInvestment, "currency")
+                  : "—"
+                : e.investment != null && e.investment !== ""
+                ? formatValue(e.investment, "currency")
+                : "—"
+            }
+            small={isSummary ? "avg per entry" : ""}
             icon="💰"
           />
 
@@ -167,7 +232,27 @@ export default function Dashboard() {
 
         {/* Filter bar */}
         <div className="rounded-xl border border-slate-100 bg-white p-4 shadow-card">
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end">
+            <Field label="Exchange">
+              <select
+                value={exchange}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setExchange(next);
+                  // Drop a symbol/account that does not belong to the new
+                  // exchange, otherwise the two filters contradict and the
+                  // result is silently empty.
+                  if (next && symbol && symbolExchange[symbol] !== next) setSymbol("");
+                  if (next && account && accountExchange[account] !== next) setAccount("");
+                }}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none"
+              >
+                <option value="">All exchanges</option>
+                {exchanges.map((x) => (
+                  <option key={x} value={x}>{x}</option>
+                ))}
+              </select>
+            </Field>
             <Field label="Symbol">
               <select
                 value={symbol}
@@ -175,7 +260,7 @@ export default function Dashboard() {
                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none"
               >
                 <option value="">All symbols</option>
-                {symbols.map((s) => (
+                {symbols.filter((s) => !exchange || symbolExchange[s] === exchange).map((s) => (
                   <option key={s} value={s}>{s}</option>
                 ))}
               </select>
@@ -187,7 +272,7 @@ export default function Dashboard() {
                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none"
               >
                 <option value="">All accounts</option>
-                {accounts.map((a) => (
+                {accounts.filter((a) => !exchange || accountExchange[a] === exchange).map((a) => (
                   <option key={a} value={a}>{a}</option>
                 ))}
               </select>

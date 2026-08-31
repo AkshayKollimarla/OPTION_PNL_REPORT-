@@ -5,8 +5,9 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
-  const date   = searchParams.get("date");
-  const symbol = searchParams.get("symbol");
+  const date     = searchParams.get("date");
+  const symbol   = searchParams.get("symbol");
+  const exchange = searchParams.get("exchange");
 
   const where  = [];
   const params = [];
@@ -18,6 +19,10 @@ export async function GET(request) {
   if (symbol && symbol !== "all") {
     where.push("token_symbol = ?");
     params.push(symbol);
+  }
+  if (exchange && exchange !== "all") {
+    where.push("exchange = ?");
+    params.push(exchange);
   }
 
   const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
@@ -52,12 +57,26 @@ export async function GET(request) {
 
     const totalNetPnl = tokens.reduce((s, t) => s + Number(t.net_pnl || 0), 0);
 
+    // Deliberately unfiltered: the dropdowns list every option that exists,
+    // not just the ones surviving the current filter, so a filter can always
+    // be widened again rather than trapping the user in an empty result.
     const [symRows] = await pool.query(
-      "SELECT DISTINCT token_symbol FROM bot_entries WHERE token_symbol IS NOT NULL ORDER BY token_symbol"
+      "SELECT DISTINCT token_symbol, exchange FROM bot_entries WHERE token_symbol IS NOT NULL AND token_symbol != '' ORDER BY exchange, token_symbol"
+    );
+    const [exRows] = await pool.query(
+      "SELECT DISTINCT exchange FROM bot_entries WHERE exchange IS NOT NULL AND exchange != '' ORDER BY exchange"
     );
     const symbols = symRows.map((r) => r.token_symbol);
 
-    return NextResponse.json({ tokens, totalNetPnl, symbols });
+    return NextResponse.json({
+      tokens,
+      totalNetPnl,
+      symbols,
+      exchanges: exRows.map((r) => r.exchange),
+      // symbol -> exchange, so the Symbol dropdown can narrow to the chosen
+      // exchange without a second round trip
+      symbolExchange: Object.fromEntries(symRows.map((r) => [r.token_symbol, r.exchange])),
+    });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
