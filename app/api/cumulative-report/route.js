@@ -9,6 +9,7 @@ export async function GET(request) {
   const dateTo   = searchParams.get("date_to")   || "";
   const account  = (searchParams.get("account")  || "").trim();
   const symbol   = (searchParams.get("symbol")   || "").trim();
+  const exchange = (searchParams.get("exchange") || "").trim();
 
   // No range means the whole history. Requiring both dates made the report
   // unreachable until two pickers were filled in, even when the wanted answer
@@ -34,6 +35,10 @@ export async function GET(request) {
     // (HYPE matches HYPE-USDC), which the plain symbol list does not carry.
     conditions.push("token_symbol LIKE ?");
     params.push(`${symbol}%`);
+  }
+  if (exchange) {
+    conditions.push("exchange = ?");
+    params.push(exchange);
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";

@@ -155,6 +155,11 @@ export default function OptionsAnalysis() {
   const [cumTo,      setCumTo]      = useState("");
   const [cumSymbol,  setCumSymbol]  = useState("all");
   const [cumAccount, setCumAccount] = useState("all");
+  const [cumExchange, setCumExchange] = useState("all");
+  // Exchange metadata for the bot side. The cumulative report reads
+  // bot_entries, so its exchange / symbol / account universe has to come from
+  // there rather than from the options book.
+  const [botMeta, setBotMeta] = useState({ exchanges: [], symbolExchange: {}, accountExchange: {} });
   const [cumBot,     setCumBot]     = useState(null);
   const [cumOpts,    setCumOpts]    = useState([]);
   const [loadingCum, setLoadingCum] = useState(false);
@@ -179,11 +184,54 @@ export default function OptionsAnalysis() {
       .catch(() => {});
   }, []);
 
+  // limit=1 because only the metadata lists are wanted here; the endpoint
+  // builds those from the whole table regardless of the row limit.
+  useEffect(() => {
+    fetch("/api/entries?limit=1", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => setBotMeta({
+        exchanges: j.exchanges || [],
+        symbolExchange: j.symbolExchange || {},
+        accountExchange: j.accountExchange || {},
+      }))
+      .catch(() => {});
+  }, []);
+
+
   // Show only base symbols: ETH, BTC, SOL (first segment before "-")
   const symbols = useMemo(() => {
     const s = new Set(allTrades.map((t) => baseToken(t.token)).filter(Boolean));
     return [...s].sort();
   }, [allTrades]);
+
+  // Which exchange a base token belongs to, derived from the bot's own
+  // symbols: BTC-PERPETUAL -> BTC -> DERIBIT, HYPE-USDC -> HYPE -> HYPERLIQUID.
+  // Underscores are normalised first so the options book's SOL_USDC lands on
+  // the same base as the bot's SOL-USDC-PERPETUAL.
+  const tokenExchange = useMemo(() => {
+    const m = {};
+    Object.entries(botMeta.symbolExchange).forEach(([sym, ex]) => {
+      m[baseToken(String(sym).split("_").join("-"))] = ex;
+    });
+    return m;
+  }, [botMeta.symbolExchange]);
+
+  const exchangeOf = (base) => tokenExchange[baseToken(String(base).split("_").join("-"))];
+
+  // With no exchange chosen the list is unchanged. With one chosen it shows
+  // only that exchange's symbols. Tokens the bot has never traded (equity
+  // options with no bot_entries rows) have no exchange and drop out, which is
+  // correct: this report is built on bot_entries.
+  const cumSymbols = useMemo(
+    () => (cumExchange === "all" ? symbols : symbols.filter((sym) => exchangeOf(sym) === cumExchange)),
+    [symbols, cumExchange, tokenExchange]
+  );
+  const cumAccounts = useMemo(
+    () => (cumExchange === "all"
+      ? accounts
+      : accounts.filter((a) => botMeta.accountExchange[a.token_name] === cumExchange)),
+    [accounts, cumExchange, botMeta.accountExchange]
+  );
 
   const filteredTrades = useMemo(() => {
     return allTrades.filter((t) => {
@@ -237,6 +285,7 @@ export default function OptionsAnalysis() {
     if (cumTo)   p.set("date_to",   cumTo);
     if (cumAccount !== "all") p.set("account", cumAccount);
     if (cumSymbol  !== "all") p.set("symbol",  cumSymbol);
+    if (cumExchange !== "all") p.set("exchange", cumExchange);
     fetch(`/api/cumulative-report?${p}`)
       .then((r) => r.json())
       .then((j) => { if (j.error) throw new Error(j.error); setCumBot(j); })
@@ -249,6 +298,10 @@ export default function OptionsAnalysis() {
       if (cumFrom && d < cumFrom) return false;
       if (cumTo   && d > cumTo)   return false;
       if (cumSymbol !== "all" && baseToken(t.token) !== cumSymbol) return false;
+      // Keep the options half on the same exchange as the bot half, or
+      // Combined PNL would add a Deribit-only bot total to an all-venue
+      // options total.
+      if (cumExchange !== "all" && exchangeOf(t.token) !== cumExchange) return false;
       return true;
     });
     setCumOpts(opts);
@@ -649,13 +702,32 @@ export default function OptionsAnalysis() {
             {/* Filters + date range */}
             <div className="rounded-xl border border-slate-100 bg-white p-5 shadow-card">
               <h2 className="text-sm font-bold text-slate-700 mb-4">Select Date Range &amp; Filters</h2>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 items-end">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-500 uppercase tracking-wide">Exchange</label>
+                  <select value={cumExchange}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setCumExchange(next);
+                      // Drop a symbol or account belonging to another exchange,
+                      // otherwise the filters contradict and the report returns
+                      // empty with nothing on screen to explain why.
+                      if (next !== "all") {
+                        if (cumSymbol !== "all" && exchangeOf(cumSymbol) !== next) setCumSymbol("all");
+                        if (cumAccount !== "all" && botMeta.accountExchange[cumAccount] !== next) setCumAccount("all");
+                      }
+                    }}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none">
+                    <option value="all">All Exchanges</option>
+                    {botMeta.exchanges.map((x) => <option key={x} value={x}>{x}</option>)}
+                  </select>
+                </div>
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-500 uppercase tracking-wide">Symbol</label>
                   <select value={cumSymbol} onChange={(e) => setCumSymbol(e.target.value)}
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none">
                     <option value="all">All Symbols</option>
-                    {symbols.map((s) => <option key={s} value={s}>{s}</option>)}
+                    {cumSymbols.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
                 <div>
@@ -663,7 +735,7 @@ export default function OptionsAnalysis() {
                   <select value={cumAccount} onChange={(e) => setCumAccount(e.target.value)}
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none">
                     <option value="all">All Accounts</option>
-                    {accounts.map((a) => <option key={a.token_name} value={a.token_name}>{a.token_name}</option>)}
+                    {cumAccounts.map((a) => <option key={a.token_name} value={a.token_name}>{a.token_name}</option>)}
                   </select>
                 </div>
                 <div>
