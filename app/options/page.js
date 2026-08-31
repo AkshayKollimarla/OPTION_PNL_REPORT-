@@ -33,7 +33,7 @@ export default function OptionsDashboard() {
   const [confirmId,  setConfirmId]  = useState(null);
   const [deletingId, setDeletingId] = useState(null);
 
-  const load = useCallback((status, tokenQ, from, to, pg, acct, bases) => {
+  const load = useCallback((status, tokenQ, from, to, pg, acct, bases, ex) => {
     setLoading(true);
     const qs = new URLSearchParams();
     if (status !== "all") qs.set("status", status);
@@ -41,6 +41,7 @@ export default function OptionsDashboard() {
     if (from)    qs.set("date_from", from);
     if (to)      qs.set("date_to",   to);
     if (acct && acct !== "all") qs.set("account", acct);
+    if (ex && ex !== "all") qs.set("exchange", ex);
     // Filtering has to happen server-side: the table is paginated, so
     // narrowing the 50 rows already fetched would hide matches on other pages
     // and quietly understate the totals.
@@ -109,12 +110,12 @@ export default function OptionsDashboard() {
   // Reset to page 1 whenever filters change
   useEffect(() => {
     setPage(1);
-    load(filter, search, dateFrom, dateTo, 1, account, exchangeBases);
-  }, [filter, search, dateFrom, dateTo, account, exchangeBases, load]);
+    load(filter, search, dateFrom, dateTo, 1, account, exchangeBases, exchange);
+  }, [filter, search, dateFrom, dateTo, account, exchangeBases, exchange, load]);
 
   // Load new page without resetting
   useEffect(() => {
-    load(filter, search, dateFrom, dateTo, page, account, exchangeBases);
+    load(filter, search, dateFrom, dateTo, page, account, exchangeBases, exchange);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 

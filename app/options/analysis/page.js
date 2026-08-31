@@ -97,6 +97,7 @@ export default function OptionsAnalysis() {
   // bot_entries, so its exchange / symbol / account universe has to come from
   // there rather than from the options book.
   const [botMeta, setBotMeta] = useState({ exchanges: [], symbolExchange: {}, accountExchange: {} });
+  const [accountExchangeById, setAccountExchangeById] = useState({});
   const [cumBot,     setCumBot]     = useState(null);
   const [cumOpts,    setCumOpts]    = useState([]);
   const [loadingCum, setLoadingCum] = useState(false);
@@ -115,6 +116,21 @@ export default function OptionsAnalysis() {
     fetch("/api/bot-period-summary")
       .then((r) => r.json())
       .then((j) => setAccounts(j.accounts || []))
+      .catch(() => {});
+  }, []);
+
+  // id -> exchange for the options accounts. A linked account states its venue
+  // outright, which is the only way symbols the grid bot never traded (CRWV,
+  // INTC, BE...) can be placed at all — they have no bot_entries row to infer
+  // from.
+  useEffect(() => {
+    fetch("/api/accounts")
+      .then((r) => r.json())
+      .then((j) => {
+        const m = {};
+        for (const a of j.accounts || []) m[a.id] = String(a.exchange || "").toUpperCase();
+        setAccountExchangeById(m);
+      })
       .catch(() => {});
   }, []);
 
@@ -153,14 +169,25 @@ export default function OptionsAnalysis() {
 
   const exchangeOf = (base) => tokenExchange[baseToken(String(base).split("_").join("-"))];
 
+  // Venue of a whole trade row. The linked account is authoritative; the token
+  // is consulted only for rows that predate account linking.
+  const tradeExchange = (t) =>
+    (t.account_id != null && accountExchangeById[t.account_id]) || exchangeOf(t.token);
+
   // With no exchange chosen the list is unchanged. With one chosen it shows
   // only that exchange's symbols. Tokens the bot has never traded (equity
   // options with no bot_entries rows) have no exchange and drop out, which is
   // correct: this report is built on bot_entries.
-  const cumSymbols = useMemo(
-    () => (cumExchange === "all" ? symbols : symbols.filter((sym) => exchangeOf(sym) === cumExchange)),
-    [symbols, cumExchange, tokenExchange]
-  );
+  // Symbols actually held at the chosen venue. Derived from the trades rather
+  // than from the token map alone, so equity symbols that only have a venue by
+  // way of their account still appear.
+  const cumSymbols = useMemo(() => {
+    if (cumExchange === "all") return symbols;
+    const here = new Set(
+      allTrades.filter((t) => tradeExchange(t) === cumExchange).map((t) => canonToken(t.token))
+    );
+    return symbols.filter((sym) => here.has(sym));
+  }, [symbols, cumExchange, tokenExchange, accountExchangeById, allTrades]);
   const cumAccounts = useMemo(
     () => (cumExchange === "all"
       ? accounts
@@ -194,7 +221,7 @@ export default function OptionsAnalysis() {
       // Keep the options half on the same exchange as the bot half, or
       // Combined PNL would add a Deribit-only bot total to an all-venue
       // options total.
-      if (cumExchange !== "all" && exchangeOf(t.token) !== cumExchange) return false;
+      if (cumExchange !== "all" && tradeExchange(t) !== cumExchange) return false;
       return true;
     });
     setCumOpts(opts);

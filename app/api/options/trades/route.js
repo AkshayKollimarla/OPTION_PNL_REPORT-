@@ -43,6 +43,7 @@ export async function GET(request) {
   const dateFrom= searchParams.get("date_from") || "";
   const dateTo  = searchParams.get("date_to")   || "";
   const account = (searchParams.get("account") || "").trim();
+  const exchange = (searchParams.get("exchange") || "").trim();
   // Comma-separated base tokens. The caller supplies them because the mapping
   // from token to exchange lives in the OTHER database (bot_entries), and this
   // endpoint should not reach across a database boundary to answer a filter.
@@ -86,12 +87,29 @@ export async function GET(request) {
       conditions.push("account_id = ?");
       params.push(account);
     }
-    if (bases.length) {
-      // Underscores are folded to dashes first so SOL_USDC reduces to the same
-      // base as SOL-HFT1-..., matching how the rest of the app treats them.
-      conditions.push(
-        `SUBSTRING_INDEX(REPLACE(token, '_', '-'), '-', 1) IN (${bases.map(() => "?").join(", ")})`
-      );
+    // Venue. The linked account is authoritative — it is recorded against a
+    // real exchange — and the token is only a fallback for rows that predate
+    // account linking. Deciding on the token alone would strand every symbol
+    // the grid bot has never traded (CRWV, INTC, BE...), since the token ->
+    // exchange map is built from bot_entries.
+    //
+    // A subquery rather than a join, so SELECT * keeps returning exactly the
+    // trade columns and the count query stays a plain count.
+    const baseMatch = bases.length
+      ? `SUBSTRING_INDEX(REPLACE(token, '_', '-'), '-', 1) IN (${bases.map(() => "?").join(", ")})`
+      : null;
+
+    if (exchange) {
+      const parts = ["account_id IN (SELECT id FROM trading_accounts WHERE UPPER(exchange) = ?)"];
+      const p = [exchange.toUpperCase()];
+      if (baseMatch) {
+        parts.push(`(account_id IS NULL AND ${baseMatch})`);
+        p.push(...bases);
+      }
+      conditions.push(`(${parts.join(" OR ")})`);
+      params.push(...p);
+    } else if (baseMatch) {
+      conditions.push(baseMatch);
       params.push(...bases);
     }
   }
