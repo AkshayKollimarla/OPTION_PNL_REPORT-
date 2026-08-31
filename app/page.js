@@ -158,15 +158,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {isSummary && (
-          <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-700">
-            Showing summary across <strong>{e._count} entries</strong> over{" "}
-            <strong>{e._days} day{e._days === 1 ? "" : "s"}</strong> —{" "}
-            {SUM_KEYS.size} metrics summed, Per Hour RTPS averaged, APY annualised
-            over the period against average investment.
-          </div>
-        )}
-
         {/* Top cards */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
           {/* Date card — shows range when summarising */}
