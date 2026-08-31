@@ -33,8 +33,14 @@ export async function GET(request) {
   if (symbol) {
     // Prefix match so a base symbol still catches its suffixed instrument
     // (HYPE matches HYPE-USDC), which the plain symbol list does not carry.
-    conditions.push("token_symbol LIKE ?");
-    params.push(`${symbol}%`);
+    //
+    // The wildcards are escaped: LIKE treats _ as "any single character", so
+    // an unescaped SOL_USDC would have matched by accident rather than by
+    // intent, and any future symbol containing _ or % would match the wrong
+    // rows outright.
+    const literal = symbol.replace(/([\\%_])/g, "\\$1");
+    conditions.push("token_symbol LIKE ? ESCAPE '\\\\'");
+    params.push(`${literal}%`);
   }
   if (exchange) {
     conditions.push("exchange = ?");
