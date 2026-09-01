@@ -315,6 +315,46 @@ export default function OptionsAnalysis() {
     });
   }, [allTrades, filterToken, filterStatus, filterDateFrom, filterDateTo]);
 
+  // One entry per STRATEGY. A combined structure is a single position spread
+  // over several rows sharing a group_id, so listing its legs separately
+  // offered the same strategy four times over.
+  const strategyUnits = useMemo(() => {
+    const byGroup = new Map();
+    const units = [];
+    filteredTrades.forEach((t) => {
+      if (t.group_id) {
+        if (byGroup.has(t.group_id)) { byGroup.get(t.group_id).legs.push(t); return; }
+        const u = { key: `g:${t.group_id}`, id: String(t.id), group_id: t.group_id, legs: [t] };
+        byGroup.set(t.group_id, u);
+        units.push(u);
+      } else {
+        units.push({ key: `s:${t.id}`, id: String(t.id), group_id: null, legs: [t] });
+      }
+    });
+    return units.map((u) => {
+      const first = u.legs[0];
+      const types = [...new Set(u.legs.map((l) => l.option_type).filter(Boolean))];
+      return {
+        ...u,
+        token: baseToken(first.token),
+        entry_date: first.entry_date,
+        end_date: first.end_date,
+        // Open if ANY leg is still open — the structure is not closed until
+        // every leg is.
+        status: u.legs.some((l) => l.status === "open") ? "OPEN" : "CLOSED",
+        types,
+      };
+    });
+  }, [filteredTrades]);
+
+  // Legs of whatever is selected, so the panel can total the structure rather
+  // than report whichever leg happened to be first.
+  const selectedUnit = useMemo(
+    () => strategyUnits.find((u) => u.id === String(selectedId)) || null,
+    [strategyUnits, selectedId]
+  );
+  const unitLegs = selectedUnit ? selectedUnit.legs : (trade ? [trade] : []);
+
   useEffect(() => {
     if (selectedId && !filteredTrades.find((t) => String(t.id) === String(selectedId))) {
       setSelectedId("");
@@ -402,7 +442,11 @@ export default function OptionsAnalysis() {
   }, [dateFrom, dateTo]);
 
   const numDays     = runningDates.length;
-  const optionPnl   = Number(trade?.net_booked_pnl || 0);
+  // Sum across the structure's legs: a 4-leg condor's result is the sum of
+  // its four, not the first one's.
+  const optionPnl   = unitLegs.length
+    ? unitLegs.reduce((a, l) => a + Number(l.net_booked_pnl || 0), 0)
+    : Number(trade?.net_booked_pnl || 0);
   const botNetPnl   = Number(botData?.summary?.net_pnl || 0);
   const combinedPnl = optionPnl + botNetPnl;
   const hasFilters  = filterToken !== "all" || filterStatus !== "all" || filterDateFrom || filterDateTo || selectedAccount;
@@ -492,7 +536,7 @@ export default function OptionsAnalysis() {
           <div>
             <label className="mb-1.5 block text-sm font-semibold text-slate-700">
               Select Strategy
-              {filteredTrades.length > 0 && <span className="ml-2 text-xs font-normal text-slate-400">({filteredTrades.length} found)</span>}
+              {filteredTrades.length > 0 && <span className="ml-2 text-xs font-normal text-slate-400">({strategyUnits.length} found)</span>}
             </label>
             {loadingList ? (
               <p className="text-sm text-slate-400">Loading strategies…</p>
@@ -506,9 +550,11 @@ export default function OptionsAnalysis() {
               <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}
                 className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:border-brand focus:outline-none">
                 <option value="">— Select a strategy —</option>
-                {filteredTrades.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    #{t.id} · {t.token} · {t.option_type} · {fmtDate(t.entry_date)} → {fmtDate(t.end_date)}
+                {strategyUnits.map((u) => (
+                  <option key={u.key} value={u.id}>
+                    {`${u.token} · ${u.legs.length > 1 ? `${u.legs.length} legs` : u.types[0] || "—"}`}
+                    {u.legs.length > 1 && u.types.length ? ` (${u.types.join("/")})` : ""}
+                    {` · ${fmtDate(u.entry_date)} → ${u.end_date ? fmtDate(u.end_date) : "open"} · ${u.status}`}
                   </option>
                 ))}
               </select>
@@ -701,16 +747,58 @@ export default function OptionsAnalysis() {
                   <div className="rounded-xl border border-teal-100 bg-white p-5 shadow-card">
                     <SecHead color="teal" title="Option Details" icon="doc" />
                     <div className="mt-4">
-                      {OPT_FIELDS.map(({ key, label, fmt: f }) => {
-                        const raw = trade[key];
-                        let val;
-                        if (f === "date") val = fmt(raw);
-                        else if (f === "currency") val = fmtCcy(raw);
-                        else if (f === "number") val = fmtNum(raw, 4);
-                        else val = raw != null && raw !== "" ? String(raw) : "—";
-                        const colored = f === "currency" && (key === "net_booked_pnl" || key === "market_making_pl");
-                        return <DRow key={key} label={label} value={val} colored={colored} />;
-                      })}
+                      {unitLegs.length > 1 ? (
+                        /* One column per leg, so a combined structure reads as
+                           the single position it is rather than as whichever
+                           leg happened to be selected. */
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm border-collapse">
+                            <thead>
+                              <tr className="border-b border-slate-200">
+                                <th className="py-2 pr-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide">Field</th>
+                                {unitLegs.map((l) => (
+                                  <th key={l.id} className="py-2 px-2 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">
+                                    {l.option_type} {l.options_strike}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {OPT_FIELDS.map(({ key, label, fmt: f }) => (
+                                <tr key={key} className="border-b border-dashed border-slate-100 last:border-0">
+                                  <td className="py-2 pr-3 text-xs text-slate-500 whitespace-nowrap">{label}</td>
+                                  {unitLegs.map((l) => {
+                                    const raw = l[key];
+                                    let val;
+                                    if (f === "date") val = fmt(raw);
+                                    else if (f === "currency") val = fmtCcy(raw);
+                                    else if (f === "number") val = fmtNum(raw, 4);
+                                    else val = raw != null && raw !== "" ? String(raw) : "—";
+                                    const colored = f === "currency" && (key === "net_booked_pnl" || key === "market_making_pl");
+                                    const neg = colored && Number(raw) < 0;
+                                    return (
+                                      <td key={l.id} className={`py-2 px-2 text-right text-sm font-semibold whitespace-nowrap ${colored ? (neg ? "text-red-500" : "text-emerald-600") : "text-slate-700"}`}>
+                                        {val}
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        OPT_FIELDS.map(({ key, label, fmt: f }) => {
+                          const raw = trade[key];
+                          let val;
+                          if (f === "date") val = fmt(raw);
+                          else if (f === "currency") val = fmtCcy(raw);
+                          else if (f === "number") val = fmtNum(raw, 4);
+                          else val = raw != null && raw !== "" ? String(raw) : "—";
+                          const colored = f === "currency" && (key === "net_booked_pnl" || key === "market_making_pl");
+                          return <DRow key={key} label={label} value={val} colored={colored} />;
+                        })
+                      )}
                     </div>
                   </div>
 
