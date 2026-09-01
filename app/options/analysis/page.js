@@ -339,14 +339,25 @@ export default function OptionsAnalysis() {
               // as it was. P&L still sums across every leg, because the
               // structure's result is the sum of its legs; only the count and
               // the investment collapse to the group.
+              // Keyed on token AND account. One coin can run on several
+              // accounts at different sizes — SOL_USDC is $40,000 on HFT1 and
+              // $17,000 on HIDDEN-ROAD — and folding them together averaged
+              // the two into a $28,500 figure that describes neither.
+              // Verified safe: no combined group spans more than one account
+              // or token, so the pair identifies a strategy unambiguously.
+              const acctNameById = {};
+              optAccounts.forEach((a) => { acctNameById[a.id] = a.name || String(a.id); });
+
               const optByToken = {};
               const seenGroups = new Set();
               cumOpts.forEach((t) => {
                 const sym = canonToken(t.token);
-                if (!optByToken[sym]) {
-                  optByToken[sym] = { pnl: 0, strategies: 0, invSum: 0, invCount: 0 };
+                const acct = t.account_id != null ? (acctNameById[t.account_id] || String(t.account_id)) : "—";
+                const key = `${sym}||${acct}`;
+                if (!optByToken[key]) {
+                  optByToken[key] = { token: sym, account: acct, pnl: 0, strategies: 0, invSum: 0, invCount: 0 };
                 }
-                const b = optByToken[sym];
+                const b = optByToken[key];
                 b.pnl += Number(t.net_booked_pnl || 0);
 
                 // A row with no group_id is a standalone one-leg strategy and
@@ -448,15 +459,21 @@ export default function OptionsAnalysis() {
                         <table className="w-full text-sm border-collapse">
                           <thead>
                             <tr className="border-b border-slate-200">
-                              {["Token","Strategies","Investment","Net Booked PNL"].map((h) => (
-                                <th key={h} className={`py-2 px-3 text-xs font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap ${h === "Token" ? "text-left" : "text-right"}`}>{h}</th>
+                              {["Token","Account","Strategies","Investment","Net Booked PNL"].map((h) => (
+                                <th key={h} className={`py-2 px-3 text-xs font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap ${h === "Token" || h === "Account" ? "text-left" : "text-right"}`}>{h}</th>
                               ))}
                             </tr>
                           </thead>
                           <tbody>
-                            {Object.entries(optByToken).sort((a, b) => b[1].pnl - a[1].pnl).map(([sym, b]) => (
-                              <tr key={sym} className="border-b border-dashed border-slate-100 last:border-0 hover:bg-slate-50/60">
-                                <td className="py-2.5 px-3 text-sm font-semibold text-teal-700">{sym}</td>
+                            {Object.entries(optByToken)
+                              // Grouped by token, best-performing account
+                              // first, so the split within a coin reads
+                              // together instead of scattering across the table.
+                              .sort((a, b) => a[1].token.localeCompare(b[1].token) || b[1].pnl - a[1].pnl)
+                              .map(([key, b]) => (
+                              <tr key={key} className="border-b border-dashed border-slate-100 last:border-0 hover:bg-slate-50/60">
+                                <td className="py-2.5 px-3 text-sm font-semibold text-teal-700">{b.token}</td>
+                                <td className="py-2.5 px-3 text-left text-sm text-slate-600">{b.account}</td>
                                 <td className="py-2.5 px-3 text-right text-sm text-slate-600">{b.strategies}</td>
                                 <td className="py-2.5 px-3 text-right text-sm text-slate-600">
                                   {b.investment != null ? fmtCcy(b.investment) : "—"}
@@ -465,7 +482,7 @@ export default function OptionsAnalysis() {
                               </tr>
                             ))}
                             <tr className="border-t-2 border-slate-200 bg-slate-50 font-bold">
-                              <td className="py-2.5 px-3 text-sm text-slate-700" colSpan={3}>TOTAL</td>
+                              <td className="py-2.5 px-3 text-sm text-slate-700" colSpan={4}>TOTAL</td>
                               <td className={`py-2.5 px-3 text-right text-sm font-bold ${totalOptPnl >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(totalOptPnl)}</td>
                             </tr>
                           </tbody>
