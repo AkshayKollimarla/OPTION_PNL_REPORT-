@@ -349,11 +349,15 @@ export default function OptionsAnalysis() {
   }, [filteredTrades, selectedId]);
 
   useEffect(() => {
-    if (!selectedId) { setTrade(null); setBotData(null); setSelectedAccount(""); return; }
+    // selectedAccount is deliberately NOT cleared here. It is the user's
+    // choice of which bot to compare against, not a property of the strategy,
+    // so it survives switching strategies and has to be re-picked only when
+    // the user actually wants a different one.
+    if (!selectedId) { setTrade(null); setBotData(null); return; }
     setLoadingTrade(true);
     fetch(`/api/options/trades/${selectedId}`)
       .then((r) => r.json())
-      .then((j) => { if (j.error) throw new Error(j.error); setTrade(j.trade); setBotData(null); setSelectedAccount(""); })
+      .then((j) => { if (j.error) throw new Error(j.error); setTrade(j.trade); setBotData(null); })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingTrade(false));
   }, [selectedId]);
