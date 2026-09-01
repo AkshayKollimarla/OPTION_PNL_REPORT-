@@ -439,6 +439,10 @@ export default function OptionsAnalysis() {
   const numDays     = runningDates.length;
   // Sum across the structure's legs: a 4-leg condor's result is the sum of
   // its four, not the first one's.
+  // Whether the bot actually traded this coin in this window. The option
+  // result stands on its own without it.
+  const hasBot = !!botData?.summary?.entry_count;
+
   const optionPnl   = unitLegs.length
     ? unitLegs.reduce((a, l) => a + Number(l.net_booked_pnl || 0), 0)
     : Number(trade?.net_booked_pnl || 0);
@@ -648,22 +652,27 @@ export default function OptionsAnalysis() {
               </div>
             </div>
 
-            {/* Bot section */}
+            {/* The bot half is optional. Its absence is reported as a notice
+                and never suppresses the option result, which is complete in
+                its own right — the strategy made what it made whether or not a
+                grid bot ran alongside it. */}
             {!selectedAccount ? (
-              <div className="rounded-xl border border-teal-100 bg-teal-50 px-5 py-4 text-center text-sm text-teal-700 font-medium">
-                Select an account above to load bot metrics and see combined PNL.
+              <div className="rounded-xl border border-teal-100 bg-teal-50 px-5 py-3 text-center text-sm text-teal-700 font-medium">
+                Select a bot account above to add the bot half and see combined PNL.
               </div>
             ) : loadingBot ? (
-              <div className="rounded-xl border border-slate-100 bg-white p-6 text-center text-sm text-slate-400">
+              <div className="rounded-xl border border-slate-100 bg-white p-4 text-center text-sm text-slate-400">
                 Loading bot metrics for <strong>{selectedAccount}</strong>…
               </div>
-            ) : !botData?.summary?.entry_count ? (
-              <div className="rounded-xl border border-amber-100 bg-amber-50 px-5 py-4 text-center text-sm text-amber-700">
+            ) : !hasBot ? (
+              <div className="rounded-xl border border-amber-100 bg-amber-50 px-5 py-3 text-center text-sm text-amber-700">
                 No bot entries for <strong>{baseToken(String(trade.token || "").split("_").join("-"))}</strong> on <strong>{selectedAccount}</strong> between {fmt(dateFrom)} and {fmt(dateTo)} — the grid bot did not trade this coin in that window, so Combined PNL is the option result alone.
               </div>
-            ) : (
+            ) : null}
+
               <>
                 {/* Bot metrics row */}
+                {hasBot && (
                 <div className="rounded-xl border border-slate-100 bg-white p-5 shadow-card">
                   <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-4">
                     Bot Metrics — {baseToken(String(trade.token || "").split("_").join("-"))} on {selectedAccount} · {fmt(dateFrom)} → {fmt(dateTo)}
@@ -678,9 +687,10 @@ export default function OptionsAnalysis() {
                     <BotBox label="APY"           sub="Annualised" value={botData.summary.apy != null ? `${Number(botData.summary.apy).toFixed(2)}%` : "—"} />
                   </div>
                 </div>
+                )}
 
                 {/* Highlight cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className={`grid grid-cols-1 gap-4 ${hasBot ? "sm:grid-cols-2" : ""}`}>
                   <div className="rounded-xl border border-teal-200 bg-white p-5 shadow-card flex items-center gap-4">
                     <div className="h-14 w-14 rounded-xl bg-teal-50 flex items-center justify-center shrink-0">
                       <svg className="h-7 w-7 text-teal-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -695,6 +705,7 @@ export default function OptionsAnalysis() {
                       <p className={`text-2xl font-extrabold mt-1 ${optionPnl >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmtCcy(optionPnl)}</p>
                     </div>
                   </div>
+                  {hasBot && (
                   <div className="rounded-xl border border-indigo-200 bg-white p-5 shadow-card flex items-center gap-4">
                     <div className="h-14 w-14 rounded-xl bg-indigo-50 flex items-center justify-center shrink-0">
                       <svg className="h-7 w-7 text-indigo-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -710,6 +721,7 @@ export default function OptionsAnalysis() {
                       <p className={`text-base font-bold ${botNetPnl >= 0 ? "text-emerald-600" : "text-red-600"}`}>Net PNL: {fmtCcy(botNetPnl)}</p>
                     </div>
                   </div>
+                  )}
                 </div>
 
                 {/* Combined PNL */}
@@ -725,14 +737,18 @@ export default function OptionsAnalysis() {
                       <p className={`text-4xl font-extrabold mt-1 ${combinedPnl >= 0 ? "text-emerald-600" : "text-red-600"}`}>
                         {fmtCcy(combinedPnl)}
                       </p>
-                      <p className="text-xs text-slate-400 mt-2">Option {fmtCcy(optionPnl)} + Bot {fmtCcy(botNetPnl)}</p>
+                      <p className="text-xs text-slate-400 mt-2">
+                        {hasBot
+                          ? `Option ${fmtCcy(optionPnl)} + Bot ${fmtCcy(botNetPnl)}`
+                          : `Option ${fmtCcy(optionPnl)} · no bot activity for this coin in the window`}
+                      </p>
                     </div>
                     <div className="h-px flex-1 bg-teal-100" />
                   </div>
                 </div>
 
                 {/* Details columns */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className={`grid grid-cols-1 gap-4 ${hasBot ? "sm:grid-cols-2" : ""}`}>
                   {/* Option Details — full input */}
                   <div className="rounded-xl border border-teal-100 bg-white p-5 shadow-card">
                     <SecHead color="teal" title="Option Details" icon="doc" />
@@ -794,7 +810,7 @@ export default function OptionsAnalysis() {
 
                   {/* The bot's configuration sheet */}
                   <div className="space-y-4">
-                    {botData.latestEntry && (
+                    {hasBot && botData.latestEntry && (
                       <div className="rounded-xl border border-indigo-100 bg-white p-5 shadow-card">
                         <SecHead color="indigo" title="Bot Sheet Details" icon="bot" />
                         <p className="mt-1 text-xs text-slate-400">
@@ -812,7 +828,6 @@ export default function OptionsAnalysis() {
                   </div>
                 </div>
               </>
-            )}
           </div>
         )}
 
