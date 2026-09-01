@@ -93,9 +93,6 @@ function botSymbolPrefix(sym) {
 
 /* ── Options input fields to display ───────────────────── */
 
-/* ── Bot param fields to display for best-day entry ──── */
-
-
 const OPT_FIELDS = [
   { key: "token",              label: "Token",              fmt: "text" },
   { key: "option_type",        label: "Option Type",        fmt: "text" },
@@ -121,7 +118,7 @@ const OPT_FIELDS = [
   { key: "market_making_pl",   label: "Market Making PL",   fmt: "currency" },
 ];
 
-/* ── Bot param fields to display for best-day entry ──── */
+/* ── The bot's configuration sheet ─────────────────────── */
 const BOT_PARAM_FIELDS = [
   { key: "investment",             label: "Investment",            fmt: "currency" },
   { key: "entry_futures",          label: "Entry Futures",         fmt: "currency" },
@@ -144,17 +141,6 @@ const BOT_PARAM_FIELDS = [
   { key: "lower_limit",            label: "Lower Limit",           fmt: "currency" },
 ];
 
-const BOT_PERF_FIELDS = [
-  { key: "rtps",          label: "RTPS",           fmt: "number" },
-  { key: "rtp_pnl",       label: "RTP PNL",        fmt: "currency" },
-  { key: "per_hour_rtps", label: "Per Hour RTPS",  fmt: "number" },
-  { key: "rebates",       label: "Rebates",        fmt: "currency" },
-  { key: "flatten_pnl",   label: "Flatten PNL",    fmt: "currency" },
-  { key: "gamma_booked",  label: "Gamma Booked",   fmt: "currency" },
-  { key: "net_pnl",       label: "Net PNL",        fmt: "currency" },
-  { key: "volume",        label: "Volume",         fmt: "currency" },
-  { key: "apy",           label: "APY",            fmt: "percent" },
-];
 
 /* ── Page ────────────────────────────────────────────────── */
 export default function OptionsAnalysis() {
@@ -798,46 +784,17 @@ export default function OptionsAnalysis() {
                     </div>
                   </div>
 
-                  {/* Bot Details — best-day entries */}
+                  {/* The bot's configuration sheet */}
                   <div className="space-y-4">
-                    {/* Best PNL day */}
-                    {botData.bestPnlEntry && (
+                    {botData.latestEntry && (
                       <div className="rounded-xl border border-indigo-100 bg-white p-5 shadow-card">
-                        <SecHead color="indigo" title={`Highest PNL Day — ${fmt(botData.bestPnlEntry.entry_datetime)}`} icon="bot" />
+                        <SecHead color="indigo" title="Bot Sheet Details" icon="bot" />
+                        <p className="mt-1 text-xs text-slate-400">
+                          Settings as of {fmt(botData.latestEntry.entry_datetime)}
+                        </p>
                         <div className="mt-4">
-                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Performance</p>
-                          {BOT_PERF_FIELDS.map(({ key, label, fmt: f }) => {
-                            const raw = botData.bestPnlEntry[key];
-                            const val = fmtVal(raw, f);
-                            const colored = f === "currency" && (key === "net_pnl" || key === "flatten_pnl" || key === "rtp_pnl");
-                            return <DRow key={key} label={label} value={val} colored={colored} />;
-                          })}
-                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mt-4 mb-2">Bot Input Parameters</p>
                           {BOT_PARAM_FIELDS.map(({ key, label, fmt: f }) => {
-                            const raw = botData.bestPnlEntry[key];
-                            if (raw === null || raw === undefined || raw === "") return null;
-                            return <DRow key={key} label={label} value={fmtVal(raw, f)} />;
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Best RTPS day (only if different from best PNL day) */}
-                    {botData.bestRtpsEntry &&
-                      botData.bestPnlEntry?.id !== botData.bestRtpsEntry?.id && (
-                      <div className="rounded-xl border border-purple-100 bg-white p-5 shadow-card">
-                        <SecHead color="purple" title={`Highest RTPS Day — ${fmt(botData.bestRtpsEntry.entry_datetime)}`} icon="rtps" />
-                        <div className="mt-4">
-                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Performance</p>
-                          {BOT_PERF_FIELDS.map(({ key, label, fmt: f }) => {
-                            const raw = botData.bestRtpsEntry[key];
-                            const val = fmtVal(raw, f);
-                            const colored = f === "currency" && (key === "net_pnl" || key === "flatten_pnl" || key === "rtp_pnl");
-                            return <DRow key={key} label={label} value={val} colored={colored} />;
-                          })}
-                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mt-4 mb-2">Bot Input Parameters</p>
-                          {BOT_PARAM_FIELDS.map(({ key, label, fmt: f }) => {
-                            const raw = botData.bestRtpsEntry[key];
+                            const raw = botData.latestEntry[key];
                             if (raw === null || raw === undefined || raw === "") return null;
                             return <DRow key={key} label={label} value={fmtVal(raw, f)} />;
                           })}

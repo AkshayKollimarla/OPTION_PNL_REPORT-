@@ -85,16 +85,12 @@ export async function GET(request) {
       ORDER BY DATE(entry_datetime)
     `, params);
 
-    // Best net_pnl entry (full row — for bot input parameters). Order by the
-    // live formula, not the stored net_pnl column, since older rows were
-    // saved under the previous formula (which included gamma_booked).
-    const [bestPnlRows] = await pool.query(
-      `SELECT * FROM bot_entries ${where} ORDER BY (COALESCE(rtp_pnl,0) + COALESCE(rebates,0)) DESC LIMIT 1`, params
-    );
-
-    // Best rtps entry (full row)
-    const [bestRtpsRows] = await pool.query(
-      `SELECT * FROM bot_entries ${where} ORDER BY rtps DESC LIMIT 1`, params
+    // The most recent entry in the window, as the source of the bot's
+    // configuration sheet. Its parameters are the settings the bot was last
+    // running under — which is what the sheet is for. Singling out a
+    // best-performing day instead described one lucky session, not the setup.
+    const [latestRows] = await pool.query(
+      `SELECT * FROM bot_entries ${where} ORDER BY entry_datetime DESC, id DESC LIMIT 1`, params
     );
 
     // Build date list using local-date arithmetic (no UTC shift)
@@ -111,8 +107,7 @@ export async function GET(request) {
       dates,
       runningDays:  dates.length,
       dayBreakdown: dayRows,
-      bestPnlEntry:  bestPnlRows[0]  ? recomputeNetPnl(bestPnlRows[0])  : null,
-      bestRtpsEntry: bestRtpsRows[0] ? recomputeNetPnl(bestRtpsRows[0]) : null,
+      latestEntry:   latestRows[0]   ? recomputeNetPnl(latestRows[0])   : null,
     });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
