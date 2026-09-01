@@ -368,7 +368,11 @@ export default function OptionsAnalysis() {
     const dt = trade.end_date   ? toLocalDateStr(trade.end_date)   : null;
     if (!df || !dt) { setBotData(null); return; }
     setLoadingBot(true);
+    // The bot half must be the same coin as the strategy, not merely the same
+    // account — see the note in the API route.
+    const base = baseToken(String(trade.token || "").split("_").join("-")).toUpperCase();
     const p = new URLSearchParams({ date_from: df, date_to: dt, account: selectedAccount });
+    if (base && base !== "—") p.set("token_base", base);
     fetch(`/api/bot-period-summary?${p}`)
       .then((r) => r.json())
       .then((j) => { if (j.error) throw new Error(j.error); setBotData(j); })
@@ -655,14 +659,14 @@ export default function OptionsAnalysis() {
               </div>
             ) : !botData?.summary?.entry_count ? (
               <div className="rounded-xl border border-amber-100 bg-amber-50 px-5 py-4 text-center text-sm text-amber-700">
-                No bot entries found for <strong>{selectedAccount}</strong> between {fmt(dateFrom)} and {fmt(dateTo)}.
+                No bot entries for <strong>{baseToken(String(trade.token || "").split("_").join("-"))}</strong> on <strong>{selectedAccount}</strong> between {fmt(dateFrom)} and {fmt(dateTo)} — the grid bot did not trade this coin in that window, so Combined PNL is the option result alone.
               </div>
             ) : (
               <>
                 {/* Bot metrics row */}
                 <div className="rounded-xl border border-slate-100 bg-white p-5 shadow-card">
                   <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-4">
-                    Bot Metrics — {selectedAccount} · {fmt(dateFrom)} → {fmt(dateTo)}
+                    Bot Metrics — {baseToken(String(trade.token || "").split("_").join("-"))} on {selectedAccount} · {fmt(dateFrom)} → {fmt(dateTo)}
                   </p>
                   <div className="grid grid-cols-4 sm:grid-cols-7 gap-3">
                     <BotBox label="RTPS"          sub="Per-RTP"    value={fmtNum(botData.summary.rtps)} />

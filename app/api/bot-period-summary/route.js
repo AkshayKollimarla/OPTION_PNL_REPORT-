@@ -14,6 +14,8 @@ export async function GET(request) {
   const dateFrom = searchParams.get("date_from") || "";
   const dateTo   = searchParams.get("date_to")   || "";
   const account  = searchParams.get("account")   || "";
+  // Base coin of the strategy being viewed, e.g. BE, CRCL, ETH, SOL.
+  const tokenBase = (searchParams.get("token_base") || "").trim();
 
   try {
     // Always return all accounts (not date-restricted)
@@ -40,6 +42,19 @@ export async function GET(request) {
     if (account && account !== "all") {
       conditions.push("account = ?");
       params.push(account);
+    }
+
+    // Match the coin as well as the account. HYPER-USMARKETS runs five coins
+    // under one account, so filtering on the account alone attributed HOOD and
+    // PLTR grid-bot P&L to a BE options strategy — a coin the bot has never
+    // traded. Deribit accounts hold one coin each, so this changes nothing
+    // there.
+    //
+    // Compared on the base: the bot writes BTC-PERPETUAL and HYPE-USDC where
+    // the options book says BTC and HYPE, and SOL_USDC has to fold to SOL.
+    if (tokenBase) {
+      conditions.push("SUBSTRING_INDEX(REPLACE(token_symbol, '_', '-'), '-', 1) = ?");
+      params.push(tokenBase);
     }
 
     const where = `WHERE ${conditions.join(" AND ")}`;
