@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 
-const EXCHANGES = ["deribit", "binance", "bybit", "okx", "hyperliquid", "other"];
+const EXCHANGES = ["deribit", "hyperliquid", "alpaca", "binance", "bybit", "okx", "other"];
 
 const EMPTY = {
   name: "", exchange: "deribit", api_key: "", api_secret: "", private_key: "", testnet: false,
