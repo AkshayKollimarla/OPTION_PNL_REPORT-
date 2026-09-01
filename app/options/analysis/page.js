@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
+import StrategySelect from "../../../components/StrategySelect";
 
 /* ── Formatters ─────────────────────────────────────────── */
 function pad(n) { return String(n).padStart(2, "0"); }
@@ -547,17 +548,12 @@ export default function OptionsAnalysis() {
                   : "No strategies match the selected filters."}
               </p>
             ) : (
-              <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:border-brand focus:outline-none">
-                <option value="">— Select a strategy —</option>
-                {strategyUnits.map((u) => (
-                  <option key={u.key} value={u.id}>
-                    {`${u.token} · ${u.legs.length > 1 ? `${u.legs.length} legs` : u.types[0] || "—"}`}
-                    {u.legs.length > 1 && u.types.length ? ` (${u.types.join("/")})` : ""}
-                    {` · ${fmtDate(u.entry_date)} → ${u.end_date ? fmtDate(u.end_date) : "open"} · ${u.status}`}
-                  </option>
-                ))}
-              </select>
+              <StrategySelect
+                units={strategyUnits}
+                value={selectedId}
+                onChange={setSelectedId}
+                fmtDate={fmtDate}
+              />
             )}
           </div>
         </div>
