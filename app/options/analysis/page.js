@@ -98,6 +98,7 @@ export default function OptionsAnalysis() {
   // there rather than from the options book.
   const [botMeta, setBotMeta] = useState({ exchanges: [], symbolExchange: {}, accountExchange: {} });
   const [accountExchangeById, setAccountExchangeById] = useState({});
+  const [optAccounts, setOptAccounts] = useState([]);   // options-side accounts
   const [cumBot,     setCumBot]     = useState(null);
   const [cumOpts,    setCumOpts]    = useState([]);
   const [loadingCum, setLoadingCum] = useState(false);
@@ -130,6 +131,7 @@ export default function OptionsAnalysis() {
         const m = {};
         for (const a of j.accounts || []) m[a.id] = String(a.exchange || "").toUpperCase();
         setAccountExchangeById(m);
+        setOptAccounts(j.accounts || []);
       })
       .catch(() => {});
   }, []);
@@ -174,6 +176,25 @@ export default function OptionsAnalysis() {
   const tradeExchange = (t) =>
     (t.account_id != null && accountExchangeById[t.account_id]) || exchangeOf(t.token);
 
+  // A bot account name encodes BOTH a coin and an options account —
+  // "SOL-HFT1" is SOL on HFT1, "SOL-HIDDEN" is SOL on HIDDEN-ROAD — because
+  // the grid bot runs one coin per account while an options account holds
+  // several. Matching on the account alone made SOL-HFT1 and SOL-HIDDEN
+  // indistinguishable on the options side; matching on the coin alone made
+  // both HIDDEN-ROAD coins collapse together.
+  const optionsAccountFilter = (botAccount) => {
+    if (!botAccount || botAccount === "all") return null;
+    const exact = optAccounts.find((a) => a.name === botAccount);
+    if (exact) return { id: String(exact.id), base: null };
+    const dash = botAccount.indexOf("-");
+    const coin = dash > 0 ? botAccount.slice(0, dash) : "";
+    const hint = dash > 0 ? botAccount.slice(dash + 1) : botAccount;
+    const match = optAccounts.find((a) => String(a.name).startsWith(hint));
+    // No options counterpart: match nothing rather than everything, so the
+    // figure cannot look as though the filter had been applied.
+    return { id: match ? String(match.id) : null, base: coin ? canonToken(coin) : null };
+  };
+
   // With no exchange chosen the list is unchanged. With one chosen it shows
   // only that exchange's symbols. Tokens the bot has never traded (equity
   // options with no bot_entries rows) have no exchange and drop out, which is
@@ -212,6 +233,7 @@ export default function OptionsAnalysis() {
       .catch((e) => setError(e.message))
       .finally(() => setLoadingCum(false));
     // Options: filter allTrades client-side
+    const acctFilter = optionsAccountFilter(cumAccount);
     const opts = allTrades.filter((t) => {
       const d = t.entry_date ? toLocalDateStr(t.entry_date) : null;
       if (!d || d === "0000-00-00") return false;
@@ -222,6 +244,13 @@ export default function OptionsAnalysis() {
       // Combined PNL would add a Deribit-only bot total to an all-venue
       // options total.
       if (cumExchange !== "all" && tradeExchange(t) !== cumExchange) return false;
+      // Account was previously applied only to the bot half, so SOL-HFT1 and
+      // SOL-HIDDEN returned an identical options total.
+      if (acctFilter) {
+        if (!acctFilter.id) return false;
+        if (String(t.account_id) !== acctFilter.id) return false;
+        if (acctFilter.base && canonToken(t.token) !== acctFilter.base) return false;
+      }
       return true;
     });
     setCumOpts(opts);
