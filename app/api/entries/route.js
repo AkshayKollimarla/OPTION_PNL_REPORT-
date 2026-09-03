@@ -15,6 +15,11 @@ const NUMERIC_KEYS = new Set(
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const symbol   = searchParams.get("symbol");
+  // A base symbol matches every instrument that starts with it — SOL matches
+  // SOL-USDC-PERPETUAL — which is what the log page's dropdown offers. It is a
+  // separate parameter from `symbol` so the dashboard's exact match is
+  // untouched.
+  const symbolBase = searchParams.get("symbol_base");
   const account  = searchParams.get("account");
   const exchange = searchParams.get("exchange");
   const from    = searchParams.get("from");
@@ -29,6 +34,13 @@ export async function GET(request) {
   if (symbol) {
     where.push("token_symbol = ?");
     params.push(symbol);
+  }
+  if (symbolBase) {
+    // Escaped, because LIKE reads _ as "any single character": an unescaped
+    // SOL_USDC would match by accident rather than by intent.
+    const literal = symbolBase.replace(/([\\%_])/g, "\\$1");
+    where.push("token_symbol LIKE ? ESCAPE '\\\\'");
+    params.push(`${literal}%`);
   }
   if (account) {
     where.push("account = ?");

@@ -40,17 +40,26 @@ export default function EntriesLog() {
   const [acctExchange,  setAcctExchange]  = useState({});
   const [truncated,     setTruncated]     = useState(false);
 
-  // The DATE filter is applied server-side. Doing it client-side only ever
-  // filtered the rows already fetched, and the fetch returned just the newest
-  // page of them — so selecting an older range searched recent rows and found
-  // nothing, even though the entries existed. Refetching on date change is
-  // what makes an older range actually reachable.
+  // EVERY filter is applied server-side, over the whole table.
+  //
+  // Filtering client-side only ever narrowed the rows already fetched, and the
+  // fetch returned just the newest page of them — so an older entry looked
+  // deleted when it was merely past the page boundary. HIMS stopped appearing
+  // the day the table passed 500 rows: its four June entries are the oldest in
+  // the log, the page asked for the 500 newest, and picking HIMS then searched
+  // a window that no longer contained it. Asking the database to do the
+  // filtering makes every match reachable however far back it sits.
   useEffect(() => {
     setLoading(true);
     const qs = new URLSearchParams();
     if (filterFrom) qs.set("from", filterFrom);
     if (filterTo)   qs.set("to",   filterTo);
-    qs.set("limit", "500");
+    if (filterExchange !== "all") qs.set("exchange", filterExchange);
+    if (filterAccount  !== "all") qs.set("account",  filterAccount);
+    // The dropdown offers base symbols (SOL), the column holds instruments
+    // (SOL-USDC-PERPETUAL), so this is a prefix match.
+    if (filterSymbol   !== "all") qs.set("symbol_base", filterSymbol);
+    qs.set("limit", "1000");
     fetch(`/api/entries?${qs}`)
       .then((r) => r.json())
       .then((json) => {
@@ -74,7 +83,7 @@ export default function EntriesLog() {
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [filterFrom, filterTo]);
+  }, [filterFrom, filterTo, filterExchange, filterAccount, filterSymbol]);
 
   // Unique symbols (ETH, SOL, BTC…)
   // Each dropdown is scoped by the one above it, so the choices on offer are
@@ -101,6 +110,8 @@ export default function EntriesLog() {
   const handleSymbolChange = (v) => setFilterSymbol(v);
   const handleExchangeChange = (v) => { setFilterExchange(v); setFilterSymbol("all"); setFilterAccount("all"); };
 
+  // Redundant now that the server filters, and kept only so the table cannot
+  // briefly show the previous result set while the refetch is in flight.
   const filtered = useMemo(() => {
     return entries.filter((e) => {
       if (filterExchange !== "all" && (e.exchange || acctExchange[e.account]) !== filterExchange) return false;
@@ -193,6 +204,16 @@ export default function EntriesLog() {
             </div>
           </div>
         </div>
+
+        {/* The row cap was silently swallowing the oldest entries: the state was
+            already tracked and simply never rendered, so the log looked
+            complete when it was not. Say so instead. */}
+        {truncated && !loading && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Showing the 1,000 newest matching entries — older ones are not on
+            this page. Narrow by exchange, symbol, account or date to reach them.
+          </div>
+        )}
 
         {loading ? (
           <p className="text-sm text-slate-400">Loading…</p>
