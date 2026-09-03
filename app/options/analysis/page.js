@@ -85,6 +85,21 @@ function canonToken(token) {
   return base === "SOL" ? "SOL_USDC" : base;
 }
 
+// The part of a strategy's result that the bot half does not already contain.
+//
+// net_booked_pnl is entered as futures + options + market-making, and the
+// market-making leg is the grid bot's own contribution — it is already in the
+// Bot Net PNL reported beside this figure. Counting it on both sides inflated
+// Combined PNL by exactly the market-making amount.
+//
+// Subtracting is the only definition that holds for every row: the newer ones
+// record fut_pnl and opt_pnl separately and sum to the same answer, but the
+// older ones never had the split filled in and carry only the total and the
+// market-making part.
+function optionPnlOf(row) {
+  return Number(row.net_booked_pnl || 0) - Number(row.market_making_pl || 0);
+}
+
 // The plain coin behind a canonical label, for composing bot account names.
 function plainBase(canon) { return canon === "SOL_USDC" ? "SOL" : canon; }
 
@@ -518,8 +533,8 @@ export default function OptionsAnalysis() {
   const hasBot = !!botData?.summary?.entry_count;
 
   const optionPnl   = unitLegs.length
-    ? unitLegs.reduce((a, l) => a + Number(l.net_booked_pnl || 0), 0)
-    : Number(trade?.net_booked_pnl || 0);
+    ? unitLegs.reduce((a, l) => a + optionPnlOf(l), 0)
+    : (trade ? optionPnlOf(trade) : 0);
   const botNetPnl   = Number(botData?.summary?.net_pnl || 0);
   const combinedPnl = optionPnl + botNetPnl;
   const hasFilters  = filterToken !== "all" || filterStatus !== "all" || filterDateFrom || filterDateTo || selectedAccount;
@@ -999,7 +1014,7 @@ export default function OptionsAnalysis() {
                   optByToken[key] = { token: sym, account: acct, pnl: 0, strategies: 0, invSum: 0, invCount: 0, spans: [] };
                 }
                 const b = optByToken[key];
-                b.pnl += Number(t.net_booked_pnl || 0);
+                b.pnl += optionPnlOf(t);
 
                 // A row with no group_id is a standalone one-leg strategy and
                 // always counts. A grouped row counts only the first time its

@@ -14,6 +14,11 @@ export const dynamic = "force-dynamic";
 // definition — nothing is booked until the position is closed — so including
 // them would not change the number, but counting them separately makes it
 // clear how much of the book is still running.
+//
+// Market-making PL is deducted. net_booked_pnl is entered as futures +
+// options + market-making, and the market-making leg is the grid bot's own
+// contribution, already counted in the bot metrics this card sits beside;
+// leaving it in reported it twice.
 export async function GET(request) {
   const sp = new URL(request.url).searchParams;
   const from = sp.get("from");
@@ -63,7 +68,9 @@ export async function GET(request) {
   try {
     const [rows] = await optionsPool.query(
       `SELECT
-         COALESCE(SUM(CASE WHEN status = 'closed' THEN COALESCE(net_booked_pnl, 0) ELSE 0 END), 0) AS bookedPnl,
+         COALESCE(SUM(CASE WHEN status = 'closed'
+                          THEN COALESCE(net_booked_pnl, 0) - COALESCE(market_making_pl, 0)
+                          ELSE 0 END), 0) AS bookedPnl,
          SUM(status = 'closed') AS closedCount,
          SUM(status = 'open')   AS openCount,
          COUNT(*)               AS totalCount
