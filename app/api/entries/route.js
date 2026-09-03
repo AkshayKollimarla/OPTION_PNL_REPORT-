@@ -65,6 +65,25 @@ export async function GET(request) {
     const [exchangeRows] = await pool.query(
       `SELECT DISTINCT exchange FROM bot_entries WHERE exchange IS NOT NULL AND exchange != '' ORDER BY exchange`
     );
+    // Capital behind each coin, as the entry log records it. This is the whole
+    // book for the coin — bot and options together — so it is the figure the
+    // options result should be measured against, and it is deliberately read
+    // from the full table rather than the requested window: the allocation is
+    // a standing fact about the account, not a property of the date range.
+    //
+    // The latest value per (account, symbol) wins; investments get revised,
+    // and the current one is the one that describes the position today.
+    const [investmentRows] = await pool.query(
+      `SELECT account, token_symbol,
+              SUBSTRING_INDEX(
+                GROUP_CONCAT(investment ORDER BY entry_datetime DESC, id DESC), ',', 1
+              ) AS investment
+         FROM bot_entries
+        WHERE investment IS NOT NULL AND investment > 0
+          AND account IS NOT NULL AND account != ''
+          AND token_symbol IS NOT NULL AND token_symbol != ''
+        GROUP BY account, token_symbol`
+    );
     const remapped = rows.map(recomputeNetPnl);
     return NextResponse.json({
       latest: remapped[0] || null,
@@ -76,6 +95,12 @@ export async function GET(request) {
       // account -> exchange, so the UI can group without a second round trip
       accountExchange: Object.fromEntries(accountRows.map((r) => [r.account, r.exchange])),
       exchanges: exchangeRows.map((r) => r.exchange),
+      // [{ account, token_symbol, investment }] — see the query above.
+      investments: investmentRows.map((r) => ({
+        account: r.account,
+        token_symbol: r.token_symbol,
+        investment: Number(r.investment),
+      })),
       truncated,
       limit,
     });

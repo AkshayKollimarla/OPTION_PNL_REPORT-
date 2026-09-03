@@ -85,6 +85,40 @@ function canonToken(token) {
   return base === "SOL" ? "SOL_USDC" : base;
 }
 
+// The plain coin behind a canonical label, for composing bot account names.
+function plainBase(canon) { return canon === "SOL_USDC" ? "SOL" : canon; }
+
+// Day index of a YYYY-MM-DD, so date ranges can be unioned as integers.
+function dayIndex(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return Math.floor(Date.UTC(y, m - 1, d) / 86400000);
+}
+
+// Calendar days a set of strategies was live, counted ONCE per day.
+//
+// Summing each strategy's duration would count a day twice whenever two
+// strategies overlapped, and a coin running four concurrent structures for a
+// month would report 120 days out of 30 — which then divides into APY and
+// quarters it. The union is what the capital was actually deployed for.
+function activeDays(intervals, todayIdx) {
+  const days = new Set();
+  intervals.forEach(([from, to]) => {
+    const a = dayIndex(from);
+    const b = to ? dayIndex(to) : todayIdx;
+    // A strategy opened and closed the same day still ran for a day.
+    for (let d = a; d <= Math.max(a, b); d++) days.add(d);
+  });
+  return days;
+}
+
+// Annualised return: what this result would compound to over a year if the
+// same capital kept earning at the same rate. Undefined without both a
+// capital base and a period, so it reports nothing rather than guessing.
+function apyOf(pnl, investment, days) {
+  if (!investment || investment <= 0 || !days || days <= 0) return null;
+  return (pnl / investment) * (365 / days) * 100;
+}
+
 // bot_entries spells the same instrument SOL-USDC-PERPETUAL, and the report
 // matches it by prefix, so the canonical label is translated on the way out.
 function botSymbolPrefix(sym) {
@@ -170,7 +204,7 @@ export default function OptionsAnalysis() {
   // Exchange metadata for the bot side. The cumulative report reads
   // bot_entries, so its exchange / symbol / account universe has to come from
   // there rather than from the options book.
-  const [botMeta, setBotMeta] = useState({ exchanges: [], symbolExchange: {}, accountExchange: {} });
+  const [botMeta, setBotMeta] = useState({ exchanges: [], symbolExchange: {}, accountExchange: {}, investments: [] });
   const [accountExchangeById, setAccountExchangeById] = useState({});
   const [optAccounts, setOptAccounts] = useState([]);   // options-side accounts
   const [cumBot,     setCumBot]     = useState(null);
@@ -219,6 +253,7 @@ export default function OptionsAnalysis() {
         exchanges: j.exchanges || [],
         symbolExchange: j.symbolExchange || {},
         accountExchange: j.accountExchange || {},
+        investments: j.investments || [],
       }))
       .catch(() => {});
   }, []);
@@ -249,6 +284,45 @@ export default function OptionsAnalysis() {
   // is consulted only for rows that predate account linking.
   const tradeExchange = (t) =>
     (t.account_id != null && accountExchangeById[t.account_id]) || exchangeOf(t.token);
+
+  // Capital behind a coin on an account, taken from the bot's entry log.
+  //
+  // The entry log's investment is the whole allocation for the coin — the grid
+  // bot and the options sitting on top of it are funded out of the same book —
+  // so it is the honest denominator for the options result. The options table
+  // carries its own per-strategy figure, which is kept only as a fallback for
+  // coins the bot never traded (BE, INTC, NBIS and the rest of the US names).
+  //
+  // Matching has to bridge two naming schemes. Hyperliquid names the bot
+  // account and the options account alike (HYPER-USMARKETS) and puts the coin
+  // in token_symbol, so the pair matches directly. Deribit folds the coin into
+  // the bot account name — the options book's HFT1 on SOL_USDC is the bot's
+  // SOL-HFT1, and HIDDEN-ROAD is abbreviated to HIDDEN — so the composed
+  // "<COIN>-<ACCOUNT>" is matched against the bot account as a prefix, with the
+  // remainder required to break on a hyphen so HFT1 can never match HFT10.
+  const botInvestmentOf = useMemo(() => {
+    const rows = (botMeta.investments || []).map((r) => ({
+      account: String(r.account || "").toUpperCase(),
+      base: canonToken(String(r.token_symbol || "").split("_").join("-")),
+      investment: Number(r.investment),
+    })).filter((r) => Number.isFinite(r.investment) && r.investment > 0);
+
+    const direct = {};
+    rows.forEach((r) => { direct[`${r.base}||${r.account}`] = r.investment; });
+
+    return (base, account) => {
+      const acct = String(account || "").toUpperCase();
+      const hit = direct[`${base}||${acct}`];
+      if (hit != null) return hit;
+      const composed = `${plainBase(base)}-${acct}`;
+      for (const r of rows) {
+        if (r.base !== base) continue;
+        if (composed === r.account) return r.investment;
+        if (composed.startsWith(r.account) && composed[r.account.length] === "-") return r.investment;
+      }
+      return null;
+    };
+  }, [botMeta.investments]);
 
   // A bot account name encodes BOTH a coin and an options account —
   // "SOL-HFT1" is SOL on HFT1, "SOL-HIDDEN" is SOL on HIDDEN-ROAD — because
@@ -913,6 +987,8 @@ export default function OptionsAnalysis() {
               const acctNameById = {};
               optAccounts.forEach((a) => { acctNameById[a.id] = a.name || String(a.id); });
 
+              const todayIdx = dayIndex(localIso(new Date()));
+
               const optByToken = {};
               const seenGroups = new Set();
               cumOpts.forEach((t) => {
@@ -920,7 +996,7 @@ export default function OptionsAnalysis() {
                 const acct = t.account_id != null ? (acctNameById[t.account_id] || String(t.account_id)) : "—";
                 const key = `${sym}||${acct}`;
                 if (!optByToken[key]) {
-                  optByToken[key] = { token: sym, account: acct, pnl: 0, strategies: 0, invSum: 0, invCount: 0 };
+                  optByToken[key] = { token: sym, account: acct, pnl: 0, strategies: 0, invSum: 0, invCount: 0, spans: [] };
                 }
                 const b = optByToken[key];
                 b.pnl += Number(t.net_booked_pnl || 0);
@@ -941,19 +1017,45 @@ export default function OptionsAnalysis() {
                     b.invSum += inv;
                     b.invCount += 1;
                   }
+                  // How long the strategy was live. An open one is still
+                  // running, so it counts up to today rather than stopping at
+                  // whatever its last recorded date happens to be.
+                  const from = toLocalDateStr(t.entry_date);
+                  if (from) b.spans.push([from, toLocalDateStr(t.end_date)]);
                 }
               });
 
-              // Investment is the capital standing behind the token, so it
-              // averages across that token's strategies rather than summing:
-              // the same account balance is redeployed trade after trade, and
-              // adding it up would report the balance many times over.
+              // The union of every day this row's capital was deployed, and the
+              // union across the whole table for the total line.
+              const allSpans = [];
               Object.values(optByToken).forEach((b) => {
-                b.investment = b.invCount ? b.invSum / b.invCount : null;
+                b.days = activeDays(b.spans, todayIdx).size;
+                allSpans.push(...b.spans);
+
+                // Investment comes from the bot's entry log, where it stands for
+                // the coin's whole book — bot and options together. Coins the
+                // grid bot never traded have no such row, and those fall back to
+                // the options table's own figure, averaged across the token's
+                // strategies rather than summed: the same balance is redeployed
+                // trade after trade, so adding it up would report it many times
+                // over.
+                const fromBot = botInvestmentOf(b.token, b.account);
+                b.investment = fromBot != null
+                  ? fromBot
+                  : (b.invCount ? b.invSum / b.invCount : null);
+                b.investmentSource = fromBot != null ? "bot" : (b.invCount ? "options" : null);
+                b.apy = apyOf(b.pnl, b.investment, b.days);
               });
 
               const totalOptPnl = Object.values(optByToken).reduce((a, b) => a + b.pnl, 0);
               const totalStrategies = Object.values(optByToken).reduce((a, b) => a + b.strategies, 0);
+              // Each row is a distinct coin-and-account book, so the capital
+              // behind them adds up — unlike the days, which overlap and are
+              // unioned the same way a single row's are.
+              const totalInvestment = Object.values(optByToken)
+                .reduce((a, b) => a + (b.investment || 0), 0);
+              const totalDays = activeDays(allSpans, todayIdx).size;
+              const totalApy = apyOf(totalOptPnl, totalInvestment, totalDays);
 
               return (
                 <>
@@ -1024,7 +1126,7 @@ export default function OptionsAnalysis() {
                         <table className="w-full text-sm border-collapse">
                           <thead>
                             <tr className="border-b border-slate-200">
-                              {["Token","Account","Strategies","Investment","Net Booked PNL"].map((h) => (
+                              {["Token","Account","Strategies","Days","Investment","Net Booked PNL","APY"].map((h) => (
                                 <th key={h} className={`py-2 px-3 text-xs font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap ${h === "Token" || h === "Account" ? "text-left" : "text-right"}`}>{h}</th>
                               ))}
                             </tr>
@@ -1040,15 +1142,30 @@ export default function OptionsAnalysis() {
                                 <td className="py-2.5 px-3 text-sm font-semibold text-teal-700">{b.token}</td>
                                 <td className="py-2.5 px-3 text-left text-sm text-slate-600">{b.account}</td>
                                 <td className="py-2.5 px-3 text-right text-sm text-slate-600">{b.strategies}</td>
-                                <td className="py-2.5 px-3 text-right text-sm text-slate-600">
+                                <td className="py-2.5 px-3 text-right text-sm text-slate-600">{b.days || "—"}</td>
+                                <td
+                                  className="py-2.5 px-3 text-right text-sm text-slate-600"
+                                  title={b.investmentSource === "options"
+                                    ? "No bot entry for this coin — averaged from the options strategies"
+                                    : b.investmentSource === "bot" ? "From the bot entry log (bot + options)" : ""}
+                                >
                                   {b.investment != null ? fmtCcy(b.investment) : "—"}
                                 </td>
                                 <td className={`py-2.5 px-3 text-right text-sm font-bold ${b.pnl >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(b.pnl)}</td>
+                                <td className={`py-2.5 px-3 text-right text-sm font-semibold ${b.apy == null ? "text-slate-400" : b.apy >= 0 ? "text-emerald-600" : "text-red-500"}`}>
+                                  {b.apy == null ? "—" : `${b.apy.toFixed(2)}%`}
+                                </td>
                               </tr>
                             ))}
                             <tr className="border-t-2 border-slate-200 bg-slate-50 font-bold">
-                              <td className="py-2.5 px-3 text-sm text-slate-700" colSpan={4}>TOTAL</td>
+                              <td className="py-2.5 px-3 text-sm text-slate-700" colSpan={2}>TOTAL</td>
+                              <td className="py-2.5 px-3 text-right text-sm text-slate-700">{totalStrategies}</td>
+                              <td className="py-2.5 px-3 text-right text-sm text-slate-700">{totalDays || "—"}</td>
+                              <td className="py-2.5 px-3 text-right text-sm text-slate-700">{totalInvestment ? fmtCcy(totalInvestment) : "—"}</td>
                               <td className={`py-2.5 px-3 text-right text-sm font-bold ${totalOptPnl >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(totalOptPnl)}</td>
+                              <td className={`py-2.5 px-3 text-right text-sm font-bold ${totalApy == null ? "text-slate-400" : totalApy >= 0 ? "text-emerald-600" : "text-red-500"}`}>
+                                {totalApy == null ? "—" : `${totalApy.toFixed(2)}%`}
+                              </td>
                             </tr>
                           </tbody>
                         </table>
