@@ -73,6 +73,27 @@ export async function GET(request) {
       ORDER BY net_pnl DESC
     `, params);
 
+    // The same aggregate one level finer, per coin rather than per account.
+    //
+    // The account grouping above cannot answer "what did the bot make on CRCL":
+    // HYPER-USMARKETS alone runs CRCL, HIMS, HOOD, HYPE-USDC and PLTR, and they
+    // collapse into a single row. The options book is organised by coin, so
+    // pairing the two halves needs the bot side broken out the same way.
+    const [symbolRows] = await pool.query(`
+      SELECT
+        account      AS token_name,
+        token_symbol,
+        SUM(COALESCE(rtp_pnl, 0)) + SUM(COALESCE(rebates, 0)) AS net_pnl,
+        SUM(COALESCE(rtp_pnl, 0))                AS rtp_pnl,
+        SUM(COALESCE(rebates, 0))                AS rebates,
+        SUM(COALESCE(volume, 0))                 AS volume,
+        COUNT(*)                                 AS entry_count,
+        COUNT(DISTINCT DATE(entry_datetime))     AS active_days
+      FROM bot_entries
+      ${where}
+      GROUP BY account, token_symbol
+    `, params);
+
     const totals = rows.reduce(
       (acc, r) => {
         acc.net_pnl     += Number(r.net_pnl      || 0);
@@ -86,7 +107,7 @@ export async function GET(request) {
       { net_pnl: 0, rtp_pnl: 0, rebates: 0, flatten_pnl: 0, gamma_booked: 0, volume: 0 }
     );
 
-    return NextResponse.json({ rows, totals });
+    return NextResponse.json({ rows, symbolRows, totals });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }

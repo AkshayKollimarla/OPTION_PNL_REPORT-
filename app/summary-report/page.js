@@ -190,7 +190,9 @@ export default function SummaryReport() {
                         </div>
                       </td>
                       <td className="px-4 py-4 text-right font-medium text-slate-700">{fmtNum(t.rtps, 2)}</td>
-                      <td className="px-4 py-4 text-right font-semibold text-emerald-600">{fmtCcy(t.rtp_pnl)}</td>
+                      {/* Blue, not green: RTP PNL is a component of Net PL, and
+                          two green money columns read as two results. */}
+                      <td className="px-4 py-4 text-right font-semibold text-blue-600">{fmtCcy(t.rtp_pnl)}</td>
                       <td className="px-4 py-4 text-right font-medium text-slate-700">{fmtNum(t.per_hour_rtps, 2)}</td>
                       <td className="px-4 py-4 text-right font-semibold text-orange-500">{fmtCcy(t.rebates)}</td>
                       <td className={`px-4 py-4 text-right font-semibold ${Number(t.flatten_pnl) >= 0 ? "text-teal-600" : "text-red-500"}`}>{fmtCcy(t.flatten_pnl)}</td>
@@ -231,7 +233,7 @@ export default function SummaryReport() {
                 </div>
                 <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 px-6 py-5">
                   <TotalCell label="Net PNL"     value={data.totalNetPnl} color={data.totalNetPnl >= 0 ? "emerald" : "red"} />
-                  <TotalCell label="RTP PNL"     value={totalRtpPnl}     color="emerald" />
+                  <TotalCell label="RTP PNL"     value={totalRtpPnl}     color="blue" />
                   <TotalCell label="Flatten"     value={totalFlatten}    color={totalFlatten    >= 0 ? "teal"    : "red"} />
                   <TotalCell label="Rebates"     value={totalRebates}    color="orange" />
                   <TotalCell label="Booked Gamma" value={totalGamma}     color="indigo" />

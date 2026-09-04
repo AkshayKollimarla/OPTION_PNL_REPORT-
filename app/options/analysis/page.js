@@ -100,6 +100,29 @@ function optionPnlOf(row) {
 // The plain coin behind a canonical label, for composing bot account names.
 function plainBase(canon) { return canon === "SOL_USDC" ? "SOL" : canon; }
 
+// Resolve an options (coin, account) pair onto the bot row that runs it.
+//
+// Two naming schemes have to be bridged. Hyperliquid names the bot account and
+// the options account alike (HYPER-USMARKETS) and puts the coin in
+// token_symbol, so the pair matches directly. Deribit folds the coin into the
+// bot account name — the options book's HFT1 on SOL_USDC is the bot's SOL-HFT1,
+// and HIDDEN-ROAD is abbreviated to HIDDEN — so the composed "<COIN>-<ACCOUNT>"
+// is matched against the bot account as a prefix, with the remainder required
+// to break on a hyphen so HFT1 can never match HFT10.
+//
+// `rows` carry an uppercased `account` and a canonical `base`.
+function findBotRow(rows, base, account) {
+  const acct = String(account || "").toUpperCase();
+  for (const r of rows) if (r.base === base && r.account === acct) return r;
+  const composed = `${plainBase(base)}-${acct}`;
+  for (const r of rows) {
+    if (r.base !== base) continue;
+    if (composed === r.account) return r;
+    if (composed.startsWith(r.account) && composed[r.account.length] === "-") return r;
+  }
+  return null;
+}
+
 // Day index of a YYYY-MM-DD, so date ranges can be unioned as integers.
 function dayIndex(dateStr) {
   const [y, m, d] = dateStr.split("-").map(Number);
@@ -305,13 +328,7 @@ export default function OptionsAnalysis() {
   // carries its own per-strategy figure, which is kept only as a fallback for
   // coins the bot never traded (BE, INTC, NBIS and the rest of the US names).
   //
-  // Matching has to bridge two naming schemes. Hyperliquid names the bot
-  // account and the options account alike (HYPER-USMARKETS) and puts the coin
-  // in token_symbol, so the pair matches directly. Deribit folds the coin into
-  // the bot account name — the options book's HFT1 on SOL_USDC is the bot's
-  // SOL-HFT1, and HIDDEN-ROAD is abbreviated to HIDDEN — so the composed
-  // "<COIN>-<ACCOUNT>" is matched against the bot account as a prefix, with the
-  // remainder required to break on a hyphen so HFT1 can never match HFT10.
+  // See findBotRow above for how the two naming schemes are matched.
   const botInvestmentOf = useMemo(() => {
     const rows = (botMeta.investments || []).map((r) => ({
       account: String(r.account || "").toUpperCase(),
@@ -319,22 +336,27 @@ export default function OptionsAnalysis() {
       investment: Number(r.investment),
     })).filter((r) => Number.isFinite(r.investment) && r.investment > 0);
 
-    const direct = {};
-    rows.forEach((r) => { direct[`${r.base}||${r.account}`] = r.investment; });
-
     return (base, account) => {
-      const acct = String(account || "").toUpperCase();
-      const hit = direct[`${base}||${acct}`];
-      if (hit != null) return hit;
-      const composed = `${plainBase(base)}-${acct}`;
-      for (const r of rows) {
-        if (r.base !== base) continue;
-        if (composed === r.account) return r.investment;
-        if (composed.startsWith(r.account) && composed[r.account.length] === "-") return r.investment;
-      }
-      return null;
+      const hit = findBotRow(rows, base, account);
+      return hit ? hit.investment : null;
     };
   }, [botMeta.investments]);
+
+  // What the grid bot made on this coin, over the SAME window and filters as
+  // the report. Unlike the investment — a standing allocation read from the
+  // whole table — this is a result, so it has to honour the date range, which
+  // is why it comes from the report response rather than the metadata.
+  const botPnlOf = useMemo(() => {
+    const rows = (cumBot?.symbolRows || []).map((r) => ({
+      account: String(r.token_name || "").toUpperCase(),
+      base: canonToken(String(r.token_symbol || "").split("_").join("-")),
+      // A key for the caller, so a bot account matched by two options rows is
+      // still only counted once in the total.
+      key: `${r.token_name}||${r.token_symbol}`,
+      net_pnl: Number(r.net_pnl || 0),
+    }));
+    return (base, account) => findBotRow(rows, base, account);
+  }, [cumBot]);
 
   // A bot account name encodes BOTH a coin and an options account —
   // "SOL-HFT1" is SOL on HFT1, "SOL-HIDDEN" is SOL on HIDDEN-ROAD — because
@@ -1057,6 +1079,11 @@ export default function OptionsAnalysis() {
                   : (b.invCount ? b.invSum / b.invCount : null);
                 b.investmentSource = fromBot != null ? "bot" : (b.invCount ? "options" : null);
                 b.apy = apyOf(b.pnl, b.investment, b.days);
+
+                // What the bot made on the same coin over the same window.
+                const botRow = botPnlOf(b.token, b.account);
+                b.botPnl = botRow ? botRow.net_pnl : null;
+                b.botKey = botRow ? botRow.key : null;
               });
 
               const totalOptPnl = Object.values(optByToken).reduce((a, b) => a + b.pnl, 0);
@@ -1068,6 +1095,14 @@ export default function OptionsAnalysis() {
                 .reduce((a, b) => a + (b.investment || 0), 0);
               const totalDays = activeDays(allSpans, todayIdx).size;
               const totalApy = apyOf(totalOptPnl, totalInvestment, totalDays);
+              // Each bot account-and-symbol counts once, however many options
+              // rows resolved onto it.
+              const seenBotKeys = new Set();
+              const totalBotPnl = Object.values(optByToken).reduce((a, b) => {
+                if (b.botKey == null || seenBotKeys.has(b.botKey)) return a;
+                seenBotKeys.add(b.botKey);
+                return a + b.botPnl;
+              }, 0);
 
               return (
                 <>
@@ -1141,7 +1176,7 @@ export default function OptionsAnalysis() {
                         <table className="w-full text-sm border-collapse">
                           <thead>
                             <tr className="border-b border-slate-200">
-                              {["Token","Account","Strategies","Days","Investment","Net Booked PNL","APY"].map((h) => (
+                              {["Token","Account","Strategies","Days","Investment","Option PNL","Bot PNL","APY"].map((h) => (
                                 <th key={h} className={`py-2 px-3 text-xs font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap ${h === "Token" || h === "Account" ? "text-left" : "text-right"}`}>{h}</th>
                               ))}
                             </tr>
@@ -1167,6 +1202,12 @@ export default function OptionsAnalysis() {
                                   {b.investment != null ? fmtCcy(b.investment) : "—"}
                                 </td>
                                 <td className={`py-2.5 px-3 text-right text-sm font-bold ${b.pnl >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(b.pnl)}</td>
+                                <td
+                                  className={`py-2.5 px-3 text-right text-sm font-semibold ${b.botPnl == null ? "text-slate-400" : b.botPnl >= 0 ? "text-emerald-600" : "text-red-500"}`}
+                                  title={b.botPnl == null ? "The grid bot did not trade this coin in this window" : ""}
+                                >
+                                  {b.botPnl == null ? "—" : fmtCcy(b.botPnl)}
+                                </td>
                                 <td className={`py-2.5 px-3 text-right text-sm font-semibold ${b.apy == null ? "text-slate-400" : b.apy >= 0 ? "text-emerald-600" : "text-red-500"}`}>
                                   {b.apy == null ? "—" : `${b.apy.toFixed(2)}%`}
                                 </td>
@@ -1178,6 +1219,7 @@ export default function OptionsAnalysis() {
                               <td className="py-2.5 px-3 text-right text-sm text-slate-700">{totalDays || "—"}</td>
                               <td className="py-2.5 px-3 text-right text-sm text-slate-700">{totalInvestment ? fmtCcy(totalInvestment) : "—"}</td>
                               <td className={`py-2.5 px-3 text-right text-sm font-bold ${totalOptPnl >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(totalOptPnl)}</td>
+                              <td className={`py-2.5 px-3 text-right text-sm font-bold ${totalBotPnl >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(totalBotPnl)}</td>
                               <td className={`py-2.5 px-3 text-right text-sm font-bold ${totalApy == null ? "text-slate-400" : totalApy >= 0 ? "text-emerald-600" : "text-red-500"}`}>
                                 {totalApy == null ? "—" : `${totalApy.toFixed(2)}%`}
                               </td>
