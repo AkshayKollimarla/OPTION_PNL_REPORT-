@@ -165,7 +165,12 @@ export default function OptionsDashboard() {
     return units;
   }, [trades]);
 
-  const COL_COUNT = 16;
+  // 15, not 16: MM PL is gone. Market-making is no longer part of an options
+  // strategy — it is the grid bot's own contribution, reported on the bot side
+  // from the entry log — so the column only ever held what older rows happened
+  // to record. The values stay in the database; they are simply not a column
+  // of the options book any more.
+  const COL_COUNT = 15;
 
   function clearFilters() {
     setSearch(""); setDateFrom(""); setDateTo(""); setFilter("all");
@@ -293,7 +298,7 @@ export default function OptionsDashboard() {
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50 text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                  {["#","Date","Token","Account","Type","Strike","Entry Price","Opt Qty","Fut Qty","Distance","Expiry","Days","Status","MM PL","Booked PnL","Actions"].map((h) => (
+                  {["#","Date","Token","Account","Type","Strike","Entry Price","Opt Qty","Fut Qty","Distance","Expiry","Days","Status","Booked PnL","Actions"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -476,9 +481,6 @@ function TradeRow({ t, combined, groupId, acctMap, confirmId, deletingId, onConf
         <span className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${STATUS_COLORS[t.status] || "bg-slate-100 text-slate-600"}`}>
           {t.status}
         </span>
-      </td>
-      <td className={`px-4 py-3 font-semibold ${Number(t.market_making_pl) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-        {fmtCcy(t.market_making_pl)}
       </td>
       <td className={`px-4 py-3 font-semibold ${Number(t.net_booked_pnl) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
         {t.net_booked_pnl != null ? fmtCcy(t.net_booked_pnl) : "—"}
