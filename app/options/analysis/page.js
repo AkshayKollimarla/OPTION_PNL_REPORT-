@@ -1127,7 +1127,7 @@ export default function OptionsAnalysis() {
                       <table className="w-full text-sm border-collapse">
                         <thead>
                           <tr className="border-b border-slate-200">
-                            {["Account","Symbol","RTPS","Net PNL","RTP PNL","Rebates","Flatten","Volume","Days"].map((h) => (
+                            {["Account","Symbol","RTPS","Net PNL","RTP PNL","Rebates","Flatten","Booked Gamma","Volume","Days"].map((h) => (
                               <th key={h} className={`py-2 px-3 text-xs font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap ${h === "Account" || h === "Symbol" ? "text-left" : "text-right"}`}>{h}</th>
                             ))}
                           </tr>
@@ -1142,6 +1142,7 @@ export default function OptionsAnalysis() {
                               <td className="py-2.5 px-3 text-right text-sm font-semibold text-slate-700 whitespace-nowrap">{fmtCcy(r.rtp_pnl)}</td>
                               <td className="py-2.5 px-3 text-right text-sm font-semibold text-slate-700 whitespace-nowrap">{fmtCcy(r.rebates)}</td>
                               <td className={`py-2.5 px-3 text-right text-sm font-semibold whitespace-nowrap ${Number(r.flatten_pnl) >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(r.flatten_pnl)}</td>
+                              <td className="py-2.5 px-3 text-right text-sm font-semibold text-indigo-600 whitespace-nowrap">{fmtCcy(r.gamma_booked)}</td>
                               <td className="py-2.5 px-3 text-right text-sm font-semibold text-slate-700 whitespace-nowrap">{fmtVol(r.volume)}</td>
                               <td className="py-2.5 px-3 text-right text-sm text-slate-500 whitespace-nowrap">{r.active_days}</td>
                             </tr>
@@ -1154,6 +1155,7 @@ export default function OptionsAnalysis() {
                             <td className="py-2.5 px-3 text-right text-sm text-slate-700">{fmtCcy(cumBot.totals.rtp_pnl)}</td>
                             <td className="py-2.5 px-3 text-right text-sm text-slate-700">{fmtCcy(cumBot.totals.rebates)}</td>
                             <td className={`py-2.5 px-3 text-right text-sm font-bold ${cumBot.totals.flatten_pnl >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(cumBot.totals.flatten_pnl)}</td>
+                            <td className="py-2.5 px-3 text-right text-sm font-bold text-indigo-600">{fmtCcy(cumBot.totals.gamma_booked)}</td>
                             <td className="py-2.5 px-3 text-right text-sm text-slate-700">{fmtVol(cumBot.totals.volume)}</td>
                             <td className="py-2.5 px-3 text-right text-sm text-slate-500">—</td>
                           </tr>
