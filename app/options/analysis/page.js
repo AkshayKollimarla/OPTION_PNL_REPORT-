@@ -85,19 +85,16 @@ function canonToken(token) {
   return base === "SOL" ? "SOL_USDC" : base;
 }
 
-// The part of a strategy's result that the bot half does not already contain.
+// The strategy's own result: futures PnL plus options PnL.
 //
-// net_booked_pnl is entered as futures + options + market-making, and the
-// market-making leg is the grid bot's own contribution — it is already in the
-// Bot Net PNL reported beside this figure. Counting it on both sides inflated
-// Combined PNL by exactly the market-making amount.
-//
-// Subtracting is the only definition that holds for every row: the newer ones
-// record fut_pnl and opt_pnl separately and sum to the same answer, but the
-// older ones never had the split filled in and carry only the total and the
-// market-making part.
+// net_booked_pnl no longer carries market-making — it is the grid bot's
+// contribution, reported on the bot side from the entry log, and counting it
+// here inflated every combined figure by exactly that amount. The stored
+// column was migrated to match, so no subtraction is needed at read time; the
+// market_making_pl column is kept only as a record of what earlier strategies
+// booked.
 function optionPnlOf(row) {
-  return Number(row.net_booked_pnl || 0) - Number(row.market_making_pl || 0);
+  return Number(row.net_booked_pnl || 0);
 }
 
 // The plain coin behind a canonical label, for composing bot account names.
@@ -1075,11 +1072,14 @@ export default function OptionsAnalysis() {
               return (
                 <>
                   {/* Summary banner */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  {/* Bot RTP PNL is gone: Bot Net PNL already reports the bot
+                      half, and RTP is one component of it, so the pair read as
+                      two separate results. The per-account table below still
+                      breaks out RTP PNL for anyone who wants the split. */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <SummaryCard label="Bot Net PNL" value={fmtCcy(cumBot.totals.net_pnl)} colored />
                     <SummaryCard label="Options PNL" value={fmtCcy(totalOptPnl)} colored />
                     <SummaryCard label="Combined PNL" value={fmtCcy(cumBot.totals.net_pnl + totalOptPnl)} colored big />
-                    <SummaryCard label="Bot RTP PNL" value={fmtCcy(cumBot.totals.rtp_pnl)} />
                   </div>
 
                   {/* Per-account bot table */}

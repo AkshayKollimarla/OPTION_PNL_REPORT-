@@ -444,7 +444,6 @@ function SimulatorInner() {
   /* ── Combined figures ───────────────────────────────── */
   const totalInvestment      = legs.reduce((s, l) => s + n(l.form.investment), 0);
   const bookedPnl            = legs.reduce((s, l) => s + n(l.form.net_booked_pnl), 0);
-  const mmPl                 = legs.reduce((s, l) => s + n(l.form.market_making_pl), 0);
   const combinedApy          = totalInvestment ? (bookedPnl / totalInvestment) * 365 * 100 : null;
   const combinedTotalTheta   = deriveds.reduce((s, d) => s + (d.total_theta_gain_loss  ?? 0), 0);
   const combinedPerDayTheta  = deriveds.reduce((s, d) => s + (d.per_day_theta_gain_loss ?? 0), 0);
@@ -1527,10 +1526,12 @@ function SimulatorInner() {
             <span className="ml-2 text-sm font-normal text-slate-400">({legs.map((l) => l.type).join(" + ")})</span>
           </h2>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+          {/* No MM PL card: market-making is no longer part of an options
+              strategy, so the figure could only ever be whatever an older row
+              happened to have stored and zero for everything new. */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
             <SummaryCard label="Total Investment" value={fmtCcy(totalInvestment)} color="blue" />
             <SummaryCard label="Booked PnL"       value={fmtCcy(bookedPnl)}       color={bookedPnl >= 0 ? "green" : "red"} />
-            <SummaryCard label="MM PL"            value={fmtCcy(mmPl)}            color={mmPl >= 0 ? "green" : "red"} />
             <SummaryCard label="Combined APY"     value={combinedApy != null ? `${combinedApy.toFixed(2)}%` : "—"} color="purple" />
             <SummaryCard label="Total Theta"      value={fmtCcy(combinedTotalTheta)}  color={combinedTotalTheta  >= 0 ? "green" : "red"} />
             <SummaryCard label="Per Day Theta"    value={fmtCcy(combinedPerDayTheta)} color={combinedPerDayTheta >= 0 ? "green" : "red"} />
@@ -1729,15 +1730,15 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
   // derived, never typed directly. Recomputes whenever any of the three
   // inputs change; stays blank until at least one of them has a value.
   useEffect(() => {
-    const { fut_pnl, opt_pnl, market_making_pl } = form;
-    if (fut_pnl === "" && opt_pnl === "" && market_making_pl === "") {
+    const { fut_pnl, opt_pnl } = form;
+    if (fut_pnl === "" && opt_pnl === "") {
       if (form.net_booked_pnl !== "") setBulk({ net_booked_pnl: "" });
       return;
     }
     const n = (v) => (v === "" || v == null ? 0 : Number(v) || 0);
-    const computed = n(fut_pnl) + n(opt_pnl) + n(market_making_pl);
+    const computed = n(fut_pnl) + n(opt_pnl);
     if (String(computed) !== String(form.net_booked_pnl)) setBulk({ net_booked_pnl: computed });
-  }, [form.fut_pnl, form.opt_pnl, form.market_making_pl]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [form.fut_pnl, form.opt_pnl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Detect DB load: token changed from empty → saved value that already has expiry/price data.
   useEffect(() => {
@@ -1998,11 +1999,10 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
           <F label="Basket Loss"><input type="number" step="any" value={form.basket_loss} onChange={(e) => set("basket_loss", e.target.value)} className={inp} /></F>
           <F label="Futures PnL"><input type="number" step="any" value={form.fut_pnl} onChange={(e) => set("fut_pnl", e.target.value)} className={inp} /></F>
           <F label="Options PnL"><input type="number" step="any" value={form.opt_pnl} onChange={(e) => set("opt_pnl", e.target.value)} className={inp} /></F>
-          <F label="Market Making PL"><input type="number" step="any" value={form.market_making_pl} onChange={(e) => set("market_making_pl", e.target.value)} className={inp} /></F>
           <F label="Net Booked PnL (auto)">
             <input type="number" step="any" value={form.net_booked_pnl} readOnly disabled
               className={`${inp} bg-slate-50 text-slate-500 cursor-not-allowed`}
-              title="Auto-calculated: Futures PnL + Options PnL + Market Making PL" />
+              title="Auto-calculated: Futures PnL + Options PnL" />
           </F>
           <F label={syncLabel("status", "Status")}>
             <select value={form.status} onChange={(e) => set("status", e.target.value)} className={`${inp} ${syncCls("status")}`}>

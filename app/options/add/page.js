@@ -360,19 +360,25 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   // ── Helpers ───────────────────────────────────────────────
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
-  // Net Booked PnL = Futures PnL + Options PnL + Market Making PL — always
-  // derived, never typed directly. Recomputes whenever any of the three
-  // inputs change; stays blank until at least one of them has a value.
+  // Net Booked PnL = Futures PnL + Options PnL — always derived, never typed
+  // directly. Recomputes whenever either input changes; stays blank until one
+  // of them has a value.
+  //
+  // Market-making PL is deliberately NOT part of this. It is the grid bot's
+  // own contribution and is reported on the bot side, from the entry log, so
+  // including it here counted it twice in every combined figure. The column
+  // still holds what earlier strategies recorded, and an edited row keeps its
+  // stored value untouched — it simply no longer feeds the booked result.
   useEffect(() => {
-    const { fut_pnl, opt_pnl, market_making_pl } = form;
-    if (fut_pnl === "" && opt_pnl === "" && market_making_pl === "") {
+    const { fut_pnl, opt_pnl } = form;
+    if (fut_pnl === "" && opt_pnl === "") {
       if (form.net_booked_pnl !== "") set("net_booked_pnl", "");
       return;
     }
     const n = (v) => (v === "" || v == null ? 0 : Number(v) || 0);
-    const computed = n(fut_pnl) + n(opt_pnl) + n(market_making_pl);
+    const computed = n(fut_pnl) + n(opt_pnl);
     if (String(computed) !== String(form.net_booked_pnl)) set("net_booked_pnl", computed);
-  }, [form.fut_pnl, form.opt_pnl, form.market_making_pl]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [form.fut_pnl, form.opt_pnl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function refreshTicker() {
     preserveRef.current = false;
@@ -1370,11 +1376,10 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
           <Section title="Close / Booked">
             <Field label="Futures PnL"><input type="number" step="any" value={form.fut_pnl} onChange={e => set("fut_pnl", e.target.value)} className={inp} /></Field>
             <Field label="Options PnL"><input type="number" step="any" value={form.opt_pnl} onChange={e => set("opt_pnl", e.target.value)} className={inp} /></Field>
-            <Field label="Market Making PL"><input type="number" step="any" value={form.market_making_pl} onChange={e => set("market_making_pl", e.target.value)} className={inp} /></Field>
             <Field label="Net Booked PnL (auto)">
               <input type="number" step="any" value={form.net_booked_pnl} readOnly disabled
                 className={`${inp} bg-slate-50 text-slate-500 cursor-not-allowed`}
-                title="Auto-calculated: Futures PnL + Options PnL + Market Making PL" />
+                title="Auto-calculated: Futures PnL + Options PnL" />
             </Field>
           </Section>
 
