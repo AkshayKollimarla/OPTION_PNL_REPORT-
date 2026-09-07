@@ -1127,7 +1127,7 @@ export default function OptionsAnalysis() {
                       <table className="w-full text-sm border-collapse">
                         <thead>
                           <tr className="border-b border-slate-200">
-                            {["Account","Symbol","RTPS","Net PNL","RTP PNL","Rebates","Flatten","Booked Gamma","Volume","Days"].map((h) => (
+                            {["Account","Symbol","RTPS","Net PNL","RTP PNL","Rebates","Flatten","Hedge Recovery PNL","Volume","Days"].map((h) => (
                               <th key={h} className={`py-2 px-3 text-xs font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap ${h === "Account" || h === "Symbol" ? "text-left" : "text-right"}`}>{h}</th>
                             ))}
                           </tr>

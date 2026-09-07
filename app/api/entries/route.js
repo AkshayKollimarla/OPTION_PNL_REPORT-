@@ -171,7 +171,7 @@ export async function POST(request) {
   }
 }
 
-// Net PNL = RTP PNL + Rebates (Gamma Booked and Flatten shown for reference, excluded)
+// Net PNL = RTP PNL + Rebates (Hedge Recovery PNL and Flatten shown for reference, excluded)
 function recomputeNetPnl(row) {
   const n = (v) => Number(v) || 0;
   return { ...row, net_pnl: n(row.rtp_pnl) + n(row.rebates) };

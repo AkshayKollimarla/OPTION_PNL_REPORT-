@@ -8,7 +8,7 @@ const METRICS = [
   { key: "per_hour_rtps", label: "Per Hour RTP", color: "slate"  },
   { key: "rebates",       label: "Rebates",     color: "orange" },
   { key: "flatten_pnl",   label: "Flatten",     color: "teal"   },
-  { key: "gamma_booked",  label: "Booked Gamma",color: "indigo" },
+  { key: "gamma_booked",  label: "Hedge Recovery PNL", color: "indigo" },
   { key: "net_pnl",       label: "Net PL",      color: "green"  },
   { key: "volume",        label: "Volume",      color: "blue"   },
   { key: "apy",           label: "APY",         color: "purple" },
@@ -236,7 +236,7 @@ export default function SummaryReport() {
                   <TotalCell label="RTP PNL"     value={totalRtpPnl}     color="blue" />
                   <TotalCell label="Flatten"     value={totalFlatten}    color={totalFlatten    >= 0 ? "teal"    : "red"} />
                   <TotalCell label="Rebates"     value={totalRebates}    color="orange" />
-                  <TotalCell label="Booked Gamma" value={totalGamma}     color="indigo" />
+                  <TotalCell label="Hedge Recovery PNL" value={totalGamma} color="indigo" />
                   <TotalCell label="Volume"      value={totalVolume}     color="blue" format={fmtVol} />
                 </div>
               </div>
