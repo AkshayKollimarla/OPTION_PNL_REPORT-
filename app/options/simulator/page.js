@@ -246,18 +246,16 @@ function SimulatorInner() {
 
   const deriveds = useMemo(() => legs.map((l) => computeDerived(l.form)), [legs]);
 
-  // Visual grouping only — CALL legs together, then PUT legs together.
-  // Sorts INDICES, not the legs array itself, so leg_index (execution
-  // order, DB storage, worker log/alert "Leg N" labels) never changes —
-  // only where each card appears on screen. Stable sort (guaranteed in
-  // Node/V8) preserves relative order within each group.
-  const legDisplayOrder = useMemo(
-    () => legs.map((_, i) => i).sort((a, b) => {
-      const groupOf = (t) => (t || "").startsWith("CALL") ? 0 : 1;
-      return groupOf(legs[a].type) - groupOf(legs[b].type);
-    }),
-    [legs]
-  );
+  // Cards render in the order they were added, full stop.
+  //
+  // They used to be grouped CALLs-first for tidiness, which meant a card
+  // MOVED the moment its type changed: building leg 1 CALL LONG, leg 2 CALL
+  // SHORT, leg 3 PUT LONG sent the third card to the bottom of the page as
+  // soon as PUT was chosen, and the card under the cursor was suddenly a
+  // different leg. Position is now stable while a structure is being built,
+  // and matches execution order — the "Leg N" in the worker log is the Nth
+  // card down the page.
+  const legDisplayOrder = useMemo(() => legs.map((_, i) => i), [legs]);
 
   useEffect(() => {
     fetch("/api/accounts")
@@ -359,10 +357,9 @@ function SimulatorInner() {
   // following, so a deliberate per-leg number is never silently overwritten
   // by a later edit to the first card.
   //
-  // "First card" is legDisplayOrder[0] — the card actually at the top of the
-  // screen — not legs[0]. Cards are displayed CALLs-first, so those differ
-  // whenever leg 1 is a PUT, and following the array order would make edits
-  // propagate from a card in the middle of the page.
+  // "First card" is the top card on screen, which is now simply legs[0] —
+  // cards are no longer reordered by type, so screen position and array order
+  // are the same thing.
   // entry_date and expiry are properties of the STRUCTURE, not of any one
   // leg — every leg of a combined strategy is opened the same day against the
   // same expiry — so they follow the first card too. Both copy verbatim; only
@@ -397,23 +394,57 @@ function SimulatorInner() {
     return String((legType || "").endsWith("SHORT") ? -n : n);
   }
 
+  // CALL or PUT, ignoring direction — the half of the structure a leg belongs
+  // to.
+  const sideOf = (legType) => ((legType || "").startsWith("CALL") ? "CALL" : "PUT");
+
   function setLegField(idx, key, value) {
     const synced = SYNCED_KEYS.includes(key);
-    setLegs((prev) => prev.map((l, i) => {
-      if (i === idx) {
-        const next = { ...l, form: { ...l.form, [key]: value } };
-        if (synced && idx !== masterLegIdx) {
-          next.overrides = { ...(l.overrides || {}), [key]: true };
+    // A quantity typed on a card that is not the first one carries to the
+    // other legs on ITS side of the structure, not to every card.
+    //
+    // The legs of a spread are sized together: a put spread is 200 long
+    // against 200 short, and re-sizing one side while leaving its pair at the
+    // first card's quantity leaves a naked leg nobody asked for. Only the
+    // first card is a master over the whole structure; every other card
+    // governs its own half.
+    const siblingSync = synced && key === "opt_entry_qty" && idx !== masterLegIdx;
+    setLegs((prev) => {
+      const side = sideOf(prev[idx]?.type);
+      return prev.map((l, i) => {
+        if (i === idx) {
+          // A typed quantity takes the card's own direction. Direction lives in
+          // the sign here — applyLegType already enforces that when the type
+          // dropdown changes — so typing 300 into a SHORT card has to mean
+          // -300. Without this the result depended on which card was touched:
+          // sizing from the long leg signed its pair correctly, sizing from
+          // the short leg left that card positive and the structure reading as
+          // two long legs.
+          const own = key === "opt_entry_qty" ? syncedValueFor(key, value, l.type) : value;
+          const next = { ...l, form: { ...l.form, [key]: own } };
+          if (synced && idx !== masterLegIdx) {
+            next.overrides = { ...(l.overrides || {}), [key]: true };
+          }
+          return next;
         }
-        return next;
-      }
-      if (synced && idx === masterLegIdx && !(l.overrides || {})[key]) {
-        const patch = { [key]: syncedValueFor(key, value, l.type) };
-        if (STRIKE_INVALIDATING.includes(key)) patch.options_strike = "";
-        return { ...l, form: { ...l.form, ...patch } };
-      }
-      return l;
-    }));
+        if (siblingSync && sideOf(l.type) === side) {
+          // Marked overridden as well, so a later edit to the first card does
+          // not silently undo the pair the user has just re-sized. The card's
+          // own re-link control puts it back under the first card's control.
+          return {
+            ...l,
+            overrides: { ...(l.overrides || {}), [key]: true },
+            form: { ...l.form, [key]: syncedValueFor(key, value, l.type) },
+          };
+        }
+        if (synced && idx === masterLegIdx && !(l.overrides || {})[key]) {
+          const patch = { [key]: syncedValueFor(key, value, l.type) };
+          if (STRIKE_INVALIDATING.includes(key)) patch.options_strike = "";
+          return { ...l, form: { ...l.form, ...patch } };
+        }
+        return l;
+      });
+    });
   }
 
   // Re-link a leg to the first card's value after it was overridden.
