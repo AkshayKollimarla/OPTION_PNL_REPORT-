@@ -353,9 +353,18 @@ export async function GET(request) {
       const recent = await recentTokens(accountId);
       const known = new Map(DERIBIT_TOKENS.map((t) => [t.symbol, t]));
       const out = [];
+      // Historical tokens carry a dated suffix — ETH-7THJULY, SOL-HDR-29THJUNE2026
+      // — which names a strategy, not a tradable instrument. Reduced to the
+      // coin so the picker offers ETH and SOL_USDC rather than a year of old
+      // labels; SOL is spelled SOL_USDC on the current book.
+      const seenBase = new Set();
       for (const t of recent) {
-        out.push({ symbol: t, name: known.get(t)?.name || "", recent: true });
-        known.delete(t);
+        let base = t.split("-")[0];
+        if (base === "SOL") base = "SOL_USDC";
+        if (!base || seenBase.has(base)) continue;
+        seenBase.add(base);
+        out.push({ symbol: base, name: known.get(base)?.name || "", recent: true });
+        known.delete(base);
       }
       for (const t of known.values()) out.push({ ...t, recent: false });
       return NextResponse.json({
