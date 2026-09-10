@@ -89,6 +89,10 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   // Live market data state
   const [liveExpiries,   setLiveExpiries]   = useState([]); // [{date, label, strikes[]}]
   const [loadingChain,   setLoadingChain]   = useState(false);
+  // Why the chain is empty, when it is. Without this the page showed blank
+  // expiry and strike dropdowns and no price, with nothing to say the symbol
+  // was not listed on the selected account.
+  const [chainError,     setChainError]     = useState(null);
   const [tickerInfo,     setTickerInfo]     = useState(null);
   const [fetchingTicker, setFetchingTicker] = useState(false);
   const chainTimerRef = useRef(null);
@@ -252,9 +256,11 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
       setLoadingChain(true);
       setLiveExpiries([]);
       setTickerInfo(null);
+      setChainError(null);
       try {
         const res  = await fetch(`/api/market?account_id=${selectedAcct}&token=${token}&action=chain`);
         const data = await res.json();
+        if (!data.expiries?.length) setChainError(data.error || `No option chain returned for ${token}.`);
         if (res.ok && data.expiries?.length) {
           setLiveExpiries(data.expiries);
           if (preserveRef.current) {
@@ -1170,6 +1176,11 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
             </select>
             {loadingChain && (
               <span className="text-xs text-slate-400 animate-pulse whitespace-nowrap">Loading chain…</span>
+            )}
+            {chainError && !loadingChain && (
+              <span className="rounded-full bg-amber-50 border border-amber-200 px-2.5 py-1 text-xs font-medium text-amber-700">
+                {chainError}
+              </span>
             )}
             {hasLiveData && !loadingChain && (
               <span className="rounded-full bg-emerald-100 border border-emerald-200 px-2.5 py-1 text-xs font-semibold text-emerald-700 whitespace-nowrap">

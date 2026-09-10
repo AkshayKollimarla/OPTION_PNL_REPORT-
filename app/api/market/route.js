@@ -150,10 +150,30 @@ export async function GET(request) {
       }
 
       if (action === "chain") {
-        const expiries = await alpacaChain(token, apiKey, apiSecret);
+        // A symbol Alpaca does not list is an ordinary outcome, not a server
+        // fault: switching an account from Deribit to the US book leaves a
+        // token like XRP_USDC in the form, and Alpaca answers 422. Reported as
+        // an empty chain with a reason, the same shape the Deribit branch
+        // returns, so the page can say why nothing loaded instead of throwing
+        // a 500 and showing blank dropdowns.
+        let expiries = [];
+        try {
+          expiries = await alpacaChain(token, apiKey, apiSecret);
+        } catch (err) {
+          const unknown = /invalid underlying|not found|422/i.test(err.message);
+          return NextResponse.json(
+            {
+              expiries: [],
+              error: unknown
+                ? `${token} is not a US-listed symbol on this account.`
+                : err.message,
+            },
+            { status: 200 }
+          );
+        }
         if (!expiries.length) {
           return NextResponse.json(
-            { expiries: [], error: `No listed options found for ${token}.` },
+            { expiries: [], error: `${token} has no listed options.` },
             { status: 200 }
           );
         }
@@ -165,8 +185,8 @@ export async function GET(request) {
         // composed (TOKEN-PERPETUAL) has no meaning here, so it is ignored and
         // the underlying share price answers instead — which is what
         // fut_entry_price holds for these strategies.
-        const u = await alpacaUnderlying(token, apiKey, apiSecret);
-        if (!u.mid) {
+        const u = await alpacaUnderlying(token, apiKey, apiSecret).catch(() => null);
+        if (!u || !u.mid) {
           return NextResponse.json(
             { error: `No quote available for ${token}.` },
             { status: 200 }
