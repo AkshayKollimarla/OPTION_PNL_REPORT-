@@ -6,7 +6,40 @@ import {
   fetchChain as alpacaChain,
   fetchUnderlying as alpacaUnderlying,
   fetchOptionTicker as alpacaTicker,
+  searchSymbols as alpacaSearch,
+  fetchAssets as alpacaAssets,
 } from "../../../lib/alpaca";
+
+// Crypto tokens the Deribit book trades, offered when nothing has been typed.
+const DERIBIT_TOKENS = [
+  { symbol: "ETH",      name: "Ether" },
+  { symbol: "BTC",      name: "Bitcoin" },
+  { symbol: "SOL_USDC", name: "Solana (USDC-linear)" },
+  { symbol: "XRP_USDC", name: "XRP (USDC-linear)" },
+];
+
+// Symbols this account has already traded, newest first.
+//
+// It is the most useful thing to show before anything is typed: the picker
+// opens on the dozen names actually in play rather than an alphabetical slice
+// of six thousand tickers.
+async function recentTokens(accountId) {
+  if (!accountId) return [];
+  try {
+    const [rows] = await pool.query(
+      `SELECT token, MAX(entry_date) AS last_used
+         FROM options_trades
+        WHERE account_id = ? AND token IS NOT NULL AND token <> ''
+        GROUP BY token
+        ORDER BY last_used DESC
+        LIMIT 60`,
+      [accountId]
+    );
+    return rows.map((r) => String(r.token).toUpperCase());
+  } catch {
+    return [];
+  }
+}
 
 export const dynamic = "force-dynamic";
 
@@ -91,6 +124,29 @@ export async function GET(request) {
           { error: "This account has no Alpaca API key and secret saved." },
           { status: 400 }
         );
+      }
+
+      if (action === "symbols") {
+        const q = (searchParams.get("q") || "").trim();
+        const [matches, recent] = await Promise.all([
+          alpacaSearch(q, apiKey, apiSecret),
+          recentTokens(accountId),
+        ]);
+        // Recent tokens are checked against the live asset list before being
+        // offered. That drops names that cannot be priced — legacy labels like
+        // HOOD-29THJUNE, and NOKIA, whose US listing is actually NOK — so the
+        // picker never suggests a symbol whose chain would come back empty.
+        const bySymbol = new Map();
+        for (const a of await alpacaAssets(apiKey, apiSecret)) bySymbol.set(a.symbol, a);
+        const qUpper = q.toUpperCase();
+        const recentHits = recent
+          .filter((t) => bySymbol.has(t))
+          .filter((t) => !q || t.includes(qUpper) || bySymbol.get(t).name.toUpperCase().includes(qUpper))
+          .map((t) => ({ ...bySymbol.get(t), recent: true }));
+
+        const seen = new Set(recentHits.map((r) => r.symbol));
+        const rest = matches.filter((a) => !seen.has(a.symbol));
+        return NextResponse.json({ symbols: [...recentHits, ...rest].slice(0, 60) });
       }
 
       if (action === "chain") {
@@ -290,6 +346,21 @@ export async function GET(request) {
           instrument,
         });
       }
+    }
+
+    if (action === "symbols") {
+      const q = (searchParams.get("q") || "").trim().toUpperCase();
+      const recent = await recentTokens(accountId);
+      const known = new Map(DERIBIT_TOKENS.map((t) => [t.symbol, t]));
+      const out = [];
+      for (const t of recent) {
+        out.push({ symbol: t, name: known.get(t)?.name || "", recent: true });
+        known.delete(t);
+      }
+      for (const t of known.values()) out.push({ ...t, recent: false });
+      return NextResponse.json({
+        symbols: out.filter((x) => !q || x.symbol.includes(q) || x.name.toUpperCase().includes(q)),
+      });
     }
 
     return NextResponse.json({ error: `action '${action}' not supported for exchange '${exchange}'` }, { status: 400 });

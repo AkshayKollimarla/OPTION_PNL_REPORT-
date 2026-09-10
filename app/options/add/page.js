@@ -6,6 +6,7 @@ import Link from "next/link";
 import { computeDerived, strikeNumber } from "../../../lib/options-calculations";
 import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
 import ExitAllModal from "../../../components/ExitAllModal";
+import TokenSelect from "../../../components/TokenSelect";
 
 const RISK_FREE = 0.05;
 
@@ -24,7 +25,6 @@ function fmtOptPrice(value, ticker) {
   }
   return n.toFixed(4);
 }
-const KNOWN_TOKENS = ["ETH", "BTC", "SOL_USDC", "XRP_USDC"];
 
 const EMPTY = {
   entry_date:"", token:"", option_type:"PUT", investment:"", options_strike:"", expiry:"",
@@ -101,7 +101,6 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   // Token field: dropdown of known tokens, or manual free-text entry for
   // anything else (e.g. DOGE_USDC, MATIC, AVAX_USDC). Starts in manual mode
   // when editing a strategy whose saved token isn't one of the known ones.
-  const [manualToken, setManualToken] = useState(() => !!(initialData?.token && !KNOWN_TOKENS.includes(initialData.token)));
 
   // Mid prices for maker limit orders
   const [optMidPriceRaw, setOptMidPriceRaw] = useState(0);
@@ -1189,43 +1188,11 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
               <input type="date" value={form.entry_date} onChange={e => set("entry_date", e.target.value)} required className={inp} />
             </Field>
             <Field label="Token" required>
-              {manualToken ? (
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder='e.g. "DOGE_USDC", "MATIC", "AVAX_USDC"'
-                    value={form.token}
-                    onChange={e => { preserveRef.current = false; set("token", e.target.value.toUpperCase()); }}
-                    required
-                    className={inp}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => { setManualToken(false); preserveRef.current = false; set("token", ""); }}
-                    className="shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50 whitespace-nowrap"
-                  >
-                    ← List
-                  </button>
-                </div>
-              ) : (
-                <select
-                  value={KNOWN_TOKENS.includes(form.token) ? form.token : ""}
-                  onChange={e => {
-                    preserveRef.current = false;
-                    if (e.target.value === "__custom__") { setManualToken(true); set("token", ""); }
-                    else set("token", e.target.value);
-                  }}
-                  required
-                  className={inp}
-                >
-                  <option value="">— Select token —</option>
-                  <option value="ETH">ETH (ETH)</option>
-                  <option value="BTC">BTC (BTC)</option>
-                  <option value="SOL_USDC">SOL (SOL_USDC)</option>
-                  <option value="XRP_USDC">XRP (XRP_USDC)</option>
-                  <option value="__custom__">Other (type manually)…</option>
-                </select>
-              )}
+              <TokenSelect
+                accountId={selectedAcct}
+                value={form.token}
+                onChange={(v) => { preserveRef.current = false; set("token", v); }}
+              />
             </Field>
             <Field label="Option Type">
               <select value={form.option_type} onChange={e => set("option_type", e.target.value)} className={inp}>

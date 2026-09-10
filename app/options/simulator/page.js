@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useMemo, Suspense, forwardRef, useImperati
 import { useRouter, useSearchParams } from "next/navigation";
 import { computeDerived, strikeNumber } from "../../../lib/options-calculations";
 import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
+import TokenSelect from "../../../components/TokenSelect";
 
 const RISK_FREE = 0.05;
 
@@ -36,13 +37,6 @@ function buildFuturesInst(token, futType) {
 }
 
 // Friendly label → Deribit currency code (SOL uses SOL_USDC on Deribit)
-const KNOWN_TOKENS = [
-  { label: "ETH",  value: "ETH"      },
-  { label: "BTC",  value: "BTC"      },
-  { label: "SOL",  value: "SOL_USDC" },
-  { label: "XRP",  value: "XRP_USDC" },
-];
-
 const LEG_STYLES = {
   "CALL LONG":  { badge: "bg-emerald-100 text-emerald-700 border-emerald-200", dot: "bg-emerald-500", txt: "text-emerald-700" },
   "CALL SHORT": { badge: "bg-orange-100  text-orange-700  border-orange-200",  dot: "bg-orange-500",  txt: "text-orange-700"  },
@@ -1718,14 +1712,6 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
   // Cleared when user explicitly changes expiry, strike, or token.
   const preserveRef  = useRef(false);
   const prevTokenRef = useRef("");
-  // Token field: dropdown of known tokens, or manual free-text entry for
-  // anything else. Switches into manual mode whenever the token (including
-  // one loaded async from a saved DB record) isn't one of the known presets.
-  const [manualToken, setManualToken] = useState(false);
-  useEffect(() => {
-    if (form.token && !KNOWN_TOKENS.some(t => t.value === form.token)) setManualToken(true);
-  }, [form.token]);
-
   // Net Booked PnL = Futures PnL + Options PnL + Market Making PL — always
   // derived, never typed directly. Recomputes whenever any of the three
   // inputs change; stays blank until at least one of them has a value.
@@ -1894,40 +1880,11 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
         <div className="grid grid-cols-2 gap-3">
           <F label={syncLabel("entry_date", "Entry Date")}><input type="date" value={form.entry_date} onChange={(e) => set("entry_date", e.target.value)} className={`${inp} ${syncCls("entry_date")}`} /></F>
           <F label={syncLabel("token", "Token")}>
-            {manualToken ? (
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder='e.g. "DOGE_USDC", "MATIC"'
-                  value={form.token}
-                  onChange={(e) => { preserveRef.current = false; set("token", e.target.value.toUpperCase()); }}
-                  className={inp}
-                />
-                <button
-                  type="button"
-                  onClick={() => { setManualToken(false); preserveRef.current = false; set("token", ""); }}
-                  className="shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50 whitespace-nowrap"
-                >
-                  ← List
-                </button>
-              </div>
-            ) : (
-              <select
-                value={KNOWN_TOKENS.some(t => t.value === form.token) ? form.token : ""}
-                onChange={(e) => {
-                  preserveRef.current = false;
-                  if (e.target.value === "__custom__") { setManualToken(true); set("token", ""); }
-                  else set("token", e.target.value);
-                }}
-                className={inp}
-              >
-                <option value="">— Select token —</option>
-                {KNOWN_TOKENS.map(t => (
-                  <option key={t.value} value={t.value}>{t.label} ({t.value})</option>
-                ))}
-                <option value="__custom__">Other (type manually)…</option>
-              </select>
-            )}
+            <TokenSelect
+              accountId={accountId}
+              value={form.token}
+              onChange={(v) => { preserveRef.current = false; set("token", v); }}
+            />
           </F>
           <F label="Investment"><input type="number" step="any" value={form.investment} onChange={(e) => set("investment", e.target.value)} className={inp} /></F>
 
