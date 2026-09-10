@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
 import pool from "../../../lib/options-db";
+import {
+  resolveProvider,
+  parseInstrument,
+  fetchChain as alpacaChain,
+  fetchUnderlying as alpacaUnderlying,
+  fetchOptionTicker as alpacaTicker,
+} from "../../../lib/alpaca";
 
 export const dynamic = "force-dynamic";
 
@@ -54,16 +61,23 @@ export async function GET(request) {
 
   let exchange = "deribit";
   let testnet  = false;
+  // Credentials are read here so the provider can be resolved from the key
+  // rather than the exchange label — see lib/alpaca.js for why the two differ
+  // on the US-markets account. They never leave the server.
+  let apiKey = null;
+  let apiSecret = null;
 
   if (accountId) {
     try {
       const [rows] = await pool.query(
-        `SELECT exchange, testnet FROM trading_accounts WHERE id = ?`,
+        `SELECT exchange, testnet, api_key, api_secret FROM trading_accounts WHERE id = ?`,
         [accountId]
       );
       if (rows.length) {
-        exchange = rows[0].exchange.toLowerCase();
         testnet  = !!rows[0].testnet;
+        exchange = resolveProvider(rows[0]);
+        apiKey    = rows[0].api_key;
+        apiSecret = rows[0].api_secret;
       }
     } catch {
       // table might not exist yet; default to deribit
@@ -71,6 +85,66 @@ export async function GET(request) {
   }
 
   try {
+    if (exchange === "alpaca") {
+      if (!apiKey || !apiSecret) {
+        return NextResponse.json(
+          { error: "This account has no Alpaca API key and secret saved." },
+          { status: 400 }
+        );
+      }
+
+      if (action === "chain") {
+        const expiries = await alpacaChain(token, apiKey, apiSecret);
+        if (!expiries.length) {
+          return NextResponse.json(
+            { expiries: [], error: `No listed options found for ${token}.` },
+            { status: 200 }
+          );
+        }
+        return NextResponse.json({ expiries });
+      }
+
+      if (action === "futures") {
+        // A US-equity strategy has no futures leg. The instrument the caller
+        // composed (TOKEN-PERPETUAL) has no meaning here, so it is ignored and
+        // the underlying share price answers instead — which is what
+        // fut_entry_price holds for these strategies.
+        const u = await alpacaUnderlying(token, apiKey, apiSecret);
+        if (!u.mid) {
+          return NextResponse.json(
+            { error: `No quote available for ${token}.` },
+            { status: 200 }
+          );
+        }
+        return NextResponse.json({
+          mark_price:  u.mid,
+          index_price: u.last || u.mid,
+          instrument:  u.symbol,
+          best_bid:    u.bid,
+          best_ask:    u.ask,
+          mid_price:   u.mid,
+        });
+      }
+
+      if (action === "ticker" && instrument) {
+        const parts = parseInstrument(instrument);
+        if (!parts) {
+          return NextResponse.json(
+            { error: `Could not read an option from '${instrument}'.` },
+            { status: 400 }
+          );
+        }
+        const data = await alpacaTicker(parts, apiKey, apiSecret);
+        if (!data.mark_price_usd) {
+          return NextResponse.json(
+            { error: `No quote for ${data.instrument}. It may not be listed, or the market is closed with no resting bid or offer.`, ...data },
+            { status: 200 }
+          );
+        }
+        return NextResponse.json(data);
+      }
+    }
+
     if (exchange === "deribit") {
       if (action === "chain") {
         let instruments = [];
