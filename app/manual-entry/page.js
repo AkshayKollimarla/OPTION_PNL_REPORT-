@@ -8,15 +8,23 @@ import {
   METRIC_CARDS,
   BOT_DETAILS_LEFT,
   BOT_DETAILS_RIGHT,
+  WORKING_HOURS_FIELD,
+  DEFAULT_WORKING_HOURS,
 } from "../../lib/fields";
 import { FORMULAS } from "../../lib/formulas";
 
-const ALL_FORM_FIELDS = [...HEADER_FIELDS, ...METRIC_CARDS, ...BOT_DETAILS_LEFT, ...BOT_DETAILS_RIGHT];
+const ALL_FORM_FIELDS = [...HEADER_FIELDS, ...METRIC_CARDS, WORKING_HOURS_FIELD, ...BOT_DETAILS_LEFT, ...BOT_DETAILS_RIGHT];
+
+// Working Hours sits immediately before Per Hour RTPS, the one figure it
+// drives, so changing it and watching the result move happen side by side.
+const PERFORMANCE_FIELDS = METRIC_CARDS.flatMap((f) =>
+  f.key === "per_hour_rtps" ? [WORKING_HOURS_FIELD, f] : [f]
+);
 const FORMULA_KEYS = new Set(Object.keys(FORMULAS));
 
 const SECTIONS = [
   { title: "Token Info", fields: HEADER_FIELDS },
-  { title: "Performance Metrics", fields: METRIC_CARDS },
+  { title: "Performance Metrics", fields: PERFORMANCE_FIELDS },
   { title: "Bot Details — Position & Spread", fields: BOT_DETAILS_LEFT },
   { title: "Bot Details — Baskets & Limits", fields: BOT_DETAILS_RIGHT },
 ];
@@ -24,6 +32,7 @@ const SECTIONS = [
 function emptyForm() {
   const f = { entry_datetime: localNow() };
   ALL_FORM_FIELDS.forEach((field) => { f[field.key] = ""; });
+  f.working_hours = String(DEFAULT_WORKING_HOURS);
   return f;
 }
 
@@ -33,6 +42,9 @@ function formFromEntry(entry) {
     const val = entry[field.key];
     f[field.key] = val === null || val === undefined ? "" : String(val);
   });
+  // An entry copied from before this column existed has no hours; it was
+  // computed on 24, so that is what it carries forward.
+  if (!(Number(f.working_hours) > 0)) f.working_hours = String(DEFAULT_WORKING_HOURS);
   return f;
 }
 
@@ -253,6 +265,9 @@ function ManualEntryInner() {
                       />
                       {autoActive && (
                         <p className="mt-0.5 text-xs text-blue-400">auto-calculated</p>
+                      )}
+                      {field.hint && !autoActive && (
+                        <p className="mt-0.5 text-xs text-slate-400">{field.hint}</p>
                       )}
                     </div>
                   );

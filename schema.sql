@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS bot_entries (
   rtps                 DECIMAL(20,4) DEFAULT 0,
   rtp_pnl              DECIMAL(20,4) DEFAULT 0,
   per_hour_rtps        DECIMAL(20,4) DEFAULT 0,
+  -- Hours the bot ran for this entry; Per Hour RTPS = RTPS / working_hours.
+  working_hours        DECIMAL(6,2)  NOT NULL DEFAULT 24,
   rebates              DECIMAL(20,4) DEFAULT 0,
   gamma_booked         DECIMAL(20,4) DEFAULT 0,
   flatten_pnl          DECIMAL(20,4) DEFAULT 0,

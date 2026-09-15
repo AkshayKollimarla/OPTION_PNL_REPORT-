@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import pool from "../../../lib/db";
-import { ALL_FIELDS } from "../../../lib/fields";
+import { ALL_FIELDS, DEFAULT_WORKING_HOURS } from "../../../lib/fields";
 
 export const dynamic = "force-dynamic";
 
@@ -147,6 +147,13 @@ export async function POST(request) {
     entryDatetime,
     ...INSERT_COLUMNS.map((key) => {
       const raw = body[key];
+      // Hours cannot fall back to 0 like the other numbers: zero hours makes
+      // Per Hour RTPS a division by zero, and a client that omits the field
+      // (an older tab, a script) means "not adjusted", which is 24.
+      if (key === "working_hours") {
+        const h = Number(raw);
+        return Number.isFinite(h) && h > 0 ? h : DEFAULT_WORKING_HOURS;
+      }
       if (NUMERIC_KEYS.has(key)) {
         const n = Number(raw);
         return Number.isFinite(n) ? n : 0;
