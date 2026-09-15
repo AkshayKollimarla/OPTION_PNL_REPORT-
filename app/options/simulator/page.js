@@ -1507,30 +1507,45 @@ function SimulatorInner() {
       )}
 
       <div className="p-6 space-y-6">
-        {/* ── Leg cards ── */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          {legDisplayOrder.map((idx) => {
-            const leg = legs[idx];
+        {/* ── Leg cards ──
+            Leg 1 carries the whole structure and keeps every field; the rest
+            are compact and stack beside it. Two independent columns rather
+            than grid row-spans: grid rows share heights, so a tall Leg 1 would
+            push gaps in between the short cards next to it. */}
+        <div className="flex flex-col xl:flex-row xl:items-start gap-6">
+          {(() => {
+            const renderLeg = (idx) => {
+              const leg = legs[idx];
+              return (
+                <LegCard
+                  key={idx}
+                  ref={el => { legRefs.current[idx] = el; }}
+                  label={`Leg ${idx + 1}`}
+                  legType={leg.type}
+                  onLegTypeChange={(t) => changeLegType(idx, t)}
+                  form={leg.form}
+                  set={(k, v) => setLegField(idx, k, v)}
+                  setBulk={(updates) => setLegBulk(idx, updates)}
+                  isSyncMaster={idx === masterLegIdx}
+                  syncOverrides={leg.overrides || {}}
+                  onRelinkField={(k) => relinkLegField(idx, k)}
+                  derived={deriveds[idx] || {}}
+                  canRemove={legs.length > 2}
+                  onRemove={() => removeLeg(idx)}
+                  accountId={selectedAcct}
+                  compact={idx !== masterLegIdx}
+                  masterForm={legs[masterLegIdx]?.form || null}
+                  syncedKeys={SYNCED_KEYS}
+                />
+              );
+            };
             return (
-              <LegCard
-                key={idx}
-                ref={el => { legRefs.current[idx] = el; }}
-                label={`Leg ${idx + 1}`}
-                legType={leg.type}
-                onLegTypeChange={(t) => changeLegType(idx, t)}
-                form={leg.form}
-                set={(k, v) => setLegField(idx, k, v)}
-                setBulk={(updates) => setLegBulk(idx, updates)}
-                isSyncMaster={idx === masterLegIdx}
-                syncOverrides={leg.overrides || {}}
-                onRelinkField={(k) => relinkLegField(idx, k)}
-                derived={deriveds[idx] || {}}
-                canRemove={legs.length > 2}
-                onRemove={() => removeLeg(idx)}
-                accountId={selectedAcct}
-              />
-            );
-          })}
+              <>
+                <div className="w-full xl:flex-1 min-w-0">
+                  {legs[masterLegIdx] && renderLeg(masterLegIdx)}
+                </div>
+                <div className="w-full xl:flex-1 min-w-0 flex flex-col gap-6">
+                  {legDisplayOrder.filter((idx) => idx !== masterLegIdx).map(renderLeg)}
 
           {/* Add Leg card */}
           <button onClick={addLeg}
@@ -1542,6 +1557,10 @@ function SimulatorInner() {
             </span>
             <span className="text-sm font-semibold text-teal-700">Add Leg {legs.length + 1}</span>
           </button>
+                </div>
+              </>
+            );
+          })()}
         </div>
 
         {/* ── Combined Net PnL ── */}
@@ -1703,7 +1722,7 @@ export default function CombinedSimulator() {
 
 /* ── Leg Card ─────────────────────────────────────────── */
 
-const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, form, set, setBulk, derived, canRemove, onRemove, accountId, isSyncMaster = false, syncOverrides = {}, onRelinkField }, ref) {
+const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, form, set, setBulk, derived, canRemove, onRemove, accountId, isSyncMaster = false, syncOverrides = {}, onRelinkField, compact = false, masterForm = null, syncedKeys = [] }, ref) {
   const inp   = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
   const style = LEG_STYLES[legType];
 
@@ -1730,6 +1749,40 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
     </span>
   );
   const syncCls = (key) => (isOverridden(key) ? "border-amber-300 bg-amber-50" : "");
+
+  // Compact cards (every leg after the first) show only what genuinely differs
+  // per leg — strike, quantity, entry and exit price, IV. Everything else is
+  // either copied from Leg 1 or recorded once for the whole structure.
+  //
+  // A field is hidden only while it carries nothing of its own. Saved
+  // strategies do NOT keep their once-per-structure values on Leg 1: across
+  // the book the futures hedge sits on legs 2-4 in over half of them, and the
+  // same goes for booked PnL, basket loss and investment. Hiding those outright
+  // would bury values that still drive the totals — and, for Fut Qty, still
+  // place a hedge on Execute — with no way to see or change them.
+  const [showDetails, setShowDetails] = useState(false);
+  const PER_LEG_KEYS = ["options_strike", "opt_entry_qty", "opt_entry_price", "opt_exit_price", "iv"];
+  const hasOwnValue = (v) => {
+    if (v === "" || v == null) return false;
+    const num = Number(v);
+    // A zero adds nothing to any total and places no hedge, so hiding it
+    // cannot hide an effect.
+    return !(String(v).trim() !== "" && Number.isFinite(num) && num === 0);
+  };
+  const sameValue = (a, b) => {
+    const na = Number(a), nb = Number(b);
+    if (a !== "" && b !== "" && a != null && b != null && Number.isFinite(na) && Number.isFinite(nb)) return na === nb;
+    return String(a ?? "") === String(b ?? "");
+  };
+  const show = (key) => {
+    if (!compact || PER_LEG_KEYS.includes(key)) return true;
+    // The futures instrument only means something once this leg has a hedge.
+    if (key === "fut_instrument_type") return hasOwnValue(form.fut_qty);
+    // A value that follows Leg 1 stays hidden while it matches; a custom or
+    // diverging one is shown, so the leg never silently runs on other terms.
+    if (syncedKeys.includes(key)) return isOverridden(key) || !sameValue(form[key], masterForm?.[key]);
+    return hasOwnValue(form[key]);
+  };
 
   // Per-leg live data state
   const [liveExpiries,   setLiveExpiries]   = useState([]);
@@ -1907,20 +1960,25 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
         )}
       </div>
 
-      <div className="p-5 space-y-4">
+      <div className={compact ? "p-4 space-y-3" : "p-5 space-y-4"}>
+        {compact && (
+          <p className="text-[11px] text-slate-400">
+            Date, token, expiry, distances and futures price follow Leg 1.
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-3">
-          <F label={syncLabel("entry_date", "Entry Date")}><input type="date" value={form.entry_date} onChange={(e) => set("entry_date", e.target.value)} className={`${inp} ${syncCls("entry_date")}`} /></F>
-          <F label={syncLabel("token", "Token")}>
+          {show("entry_date") && <F label={syncLabel("entry_date", "Entry Date")}><input type="date" value={form.entry_date} onChange={(e) => set("entry_date", e.target.value)} className={`${inp} ${syncCls("entry_date")}`} /></F>}
+          {show("token") && <F label={syncLabel("token", "Token")}>
             <TokenSelect
               accountId={accountId}
               value={form.token}
               onChange={(v) => { preserveRef.current = false; set("token", v); }}
             />
-          </F>
-          <F label="Investment"><input type="number" step="any" value={form.investment} onChange={(e) => set("investment", e.target.value)} className={inp} /></F>
+          </F>}
+          {show("investment") && <F label="Investment"><input type="number" step="any" value={form.investment} onChange={(e) => set("investment", e.target.value)} className={inp} /></F>}
 
           {/* Expiry — dropdown when live */}
-          <F label={syncLabel("expiry", hasLiveData ? "Expiry (live)" : "Expiry Date")}>
+          {show("expiry") && <F label={syncLabel("expiry", hasLiveData ? "Expiry (live)" : "Expiry Date")}>
             {hasLiveData ? (
               <select value={form.expiry} onChange={e => { preserveRef.current = false; set("expiry", e.target.value); set("options_strike", ""); }} className={inp}>
                 {liveExpiries.map(e => (
@@ -1930,7 +1988,7 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
             ) : (
               <input type="date" value={form.expiry} onChange={(e) => set("expiry", e.target.value)} className={inp} />
             )}
-          </F>
+          </F>}
 
           {/* Strike — dropdown when live */}
           <F label={hasLiveData ? "Strike (live)" : "Strike"}>
@@ -1957,7 +2015,7 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
             <input type="number" step="any" value={form.opt_entry_price} onChange={(e) => set("opt_entry_price", e.target.value)} className={inp} />
           </F>
           <F label="Exit Price"><input type="number" step="any" value={form.opt_exit_price} onChange={(e) => set("opt_exit_price", e.target.value)} className={inp} /></F>
-          {futuresHasBothTypes(form.token) && (
+          {futuresHasBothTypes(form.token) && show("fut_instrument_type") && (
             <F label="Futures Instrument">
               <select
                 value={form.fut_instrument_type || "inverse"}
@@ -1969,36 +2027,36 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
               </select>
             </F>
           )}
-          <F label="Fut Qty"><input type="number" step="any" value={form.fut_qty} onChange={(e) => set("fut_qty", e.target.value)} className={inp} /></F>
-          <F label={syncLabel("fut_entry_price", hasLiveData && form.fut_entry_price ? "Fut Entry Price (live)" : "Fut Entry Price")}>
+          {show("fut_qty") && <F label="Fut Qty"><input type="number" step="any" value={form.fut_qty} onChange={(e) => set("fut_qty", e.target.value)} className={inp} /></F>}
+          {show("fut_entry_price") && <F label={syncLabel("fut_entry_price", hasLiveData && form.fut_entry_price ? "Fut Entry Price (live)" : "Fut Entry Price")}>
             <input type="number" step="any" value={form.fut_entry_price} onChange={(e) => set("fut_entry_price", e.target.value)}
               className={`${inp} ${syncCls("fut_entry_price")}`} />
-          </F>
-          <F label="Fut Exit Price"><input type="number" step="any" value={form.fut_exit_price} onChange={(e) => set("fut_exit_price", e.target.value)} className={inp} /></F>
+          </F>}
+          {show("fut_exit_price") && <F label="Fut Exit Price"><input type="number" step="any" value={form.fut_exit_price} onChange={(e) => set("fut_exit_price", e.target.value)} className={inp} /></F>}
           <F label={tickerInfo ? "IV (%) (live)" : "IV (%) for BS"}>
             <input type="number" step="0.5" min="1" max="500" placeholder="e.g. 30" value={form.iv} onChange={(e) => set("iv", e.target.value)} className={`${inp} border-indigo-200 bg-indigo-50`} />
           </F>
-          {[["upside_distance", "Upside Distance"], ["down_distance", "Down Distance"]].map(([key, title]) => (
+          {[["upside_distance", "Upside Distance"], ["down_distance", "Down Distance"]].filter(([key]) => show(key)).map(([key, title]) => (
             <F key={key} label={syncLabel(key, title)}>
               <input type="number" step="any" value={form[key]} onChange={(e) => set(key, e.target.value)} className={`${inp} ${syncCls(key)}`} />
             </F>
           ))}
-          <F label="Basket Distance"><input type="number" step="any" value={form.basket_distance} onChange={(e) => set("basket_distance", e.target.value)} className={inp} /></F>
-          <F label="Basket Loss"><input type="number" step="any" value={form.basket_loss} onChange={(e) => set("basket_loss", e.target.value)} className={inp} /></F>
-          <F label="Futures PnL"><input type="number" step="any" value={form.fut_pnl} onChange={(e) => set("fut_pnl", e.target.value)} className={inp} /></F>
-          <F label="Options PnL"><input type="number" step="any" value={form.opt_pnl} onChange={(e) => set("opt_pnl", e.target.value)} className={inp} /></F>
-          <F label="Net Booked PnL (auto)">
+          {show("basket_distance") && <F label="Basket Distance"><input type="number" step="any" value={form.basket_distance} onChange={(e) => set("basket_distance", e.target.value)} className={inp} /></F>}
+          {show("basket_loss") && <F label="Basket Loss"><input type="number" step="any" value={form.basket_loss} onChange={(e) => set("basket_loss", e.target.value)} className={inp} /></F>}
+          {show("fut_pnl") && <F label="Futures PnL"><input type="number" step="any" value={form.fut_pnl} onChange={(e) => set("fut_pnl", e.target.value)} className={inp} /></F>}
+          {show("opt_pnl") && <F label="Options PnL"><input type="number" step="any" value={form.opt_pnl} onChange={(e) => set("opt_pnl", e.target.value)} className={inp} /></F>}
+          {show("net_booked_pnl") && <F label="Net Booked PnL (auto)">
             <input type="number" step="any" value={form.net_booked_pnl} readOnly disabled
               className={`${inp} bg-slate-50 text-slate-500 cursor-not-allowed`}
               title="Auto-calculated: Futures PnL + Options PnL" />
-          </F>
-          <F label={syncLabel("status", "Status")}>
+          </F>}
+          {show("status") && <F label={syncLabel("status", "Status")}>
             <select value={form.status} onChange={(e) => set("status", e.target.value)} className={`${inp} ${syncCls("status")}`}>
               <option value="open">Open</option>
               <option value="closed">Closed</option>
             </select>
-          </F>
-          <F label={syncLabel("end_date", "End Date")}><input type="date" value={form.end_date} onChange={(e) => set("end_date", e.target.value)} className={`${inp} ${syncCls("end_date")}`} /></F>
+          </F>}
+          {show("end_date") && <F label={syncLabel("end_date", "End Date")}><input type="date" value={form.end_date} onChange={(e) => set("end_date", e.target.value)} className={`${inp} ${syncCls("end_date")}`} /></F>}
         </div>
 
         {/* Refresh live price button + ticker info */}
@@ -2026,7 +2084,29 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
           </div>
         )}
 
+        {/* One-line result for a compact card. The full per-leg breakdown is in
+            the Side-by-Side table below; "Show details" opens this leg's own
+            calculation and Black-Scholes figures, which appear nowhere else. */}
+        {compact && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-xs">
+            <span className="text-slate-400">Breakeven <span className="font-semibold text-slate-700">{(() => {
+              const K = strikeNumber(form.options_strike);
+              const ep = parseFloat(form.opt_entry_price) || 0;
+              if (!(K > 0)) return "—";
+              return (legType.startsWith("CALL") ? K + ep : K - ep).toLocaleString(undefined, { maximumFractionDigits: 2 });
+            })()}</span></span>
+            <span className="text-slate-400">Theta/day <span className={`font-semibold ${Number(derived.per_day_theta_gain_loss) >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmt(derived.per_day_theta_gain_loss)}</span></span>
+            <span className="text-slate-400">Up <span className={`font-semibold ${Number(derived.upside_opt_pnl) >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmt(derived.upside_opt_pnl)}</span></span>
+            <span className="text-slate-400">Down <span className={`font-semibold ${Number(derived.down_opt_pnl) >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmt(derived.down_opt_pnl)}</span></span>
+            <button type="button" onClick={() => setShowDetails((v) => !v)}
+              className="ml-auto text-[11px] font-semibold text-blue-600 hover:text-blue-800">
+              {showDetails ? "Hide details" : "Show details"}
+            </button>
+          </div>
+        )}
+
         {/* Live calc strip */}
+        {(!compact || showDetails) && (
         <div className="rounded-lg bg-slate-50 border border-slate-100 p-4 space-y-1">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Auto-Calculated</p>
           <CalcRow label="Days to Expiry"    value={fmt(derived.days_to_expiry, "n")} />
@@ -2047,6 +2127,7 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
           <CalcRow label="APY"               value={derived.apy != null ? `${Number(derived.apy).toFixed(2)}%` : "—"} signed big />
           <BsStrip form={form} legType={legType} derived={derived} />
         </div>
+        )}
       </div>
     </div>
   );
