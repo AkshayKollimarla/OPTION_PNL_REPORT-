@@ -2105,10 +2105,34 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
           </div>
         )}
 
+        {/* Leg 1's calculation panel sits behind a toggle too. Open, it runs to
+            some thirty rows — most of them zeros until the card is filled in —
+            and pushed the rest of the page a full screen down. Compact cards
+            already open theirs from the one-line result above. */}
+        {!compact && (
+          <button
+            type="button"
+            onClick={() => setShowDetails((v) => !v)}
+            aria-expanded={showDetails}
+            className="flex w-full items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-4 py-2.5 text-left hover:bg-slate-100 transition-colors"
+          >
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Auto-Calculated &amp; BS Option PnL
+            </span>
+            <svg
+              className={`h-4 w-4 text-slate-400 transition-transform ${showDetails ? "rotate-180" : ""}`}
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+            >
+              <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
+
         {/* Live calc strip */}
-        {(!compact || showDetails) && (
+        {showDetails && (
         <div className="rounded-lg bg-slate-50 border border-slate-100 p-4 space-y-1">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Auto-Calculated</p>
+          {/* On Leg 1 the toggle above already names the panel. */}
+          {compact && <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Auto-Calculated</p>}
           <CalcRow label="Days to Expiry"    value={fmt(derived.days_to_expiry, "n")} />
           <CalcRow label="Total Theta"       value={fmt(derived.total_theta_gain_loss)} signed />
           <CalcRow label="Per Day Theta"     value={fmt(derived.per_day_theta_gain_loss)} signed />
