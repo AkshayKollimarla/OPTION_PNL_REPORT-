@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import StrategySelect from "../../../components/StrategySelect";
+import useDataVersion from "../../../lib/useDataVersion";
 
 /* ── Formatters ─────────────────────────────────────────── */
 function pad(n) { return String(n).padStart(2, "0"); }
@@ -243,18 +244,83 @@ export default function OptionsAnalysis() {
   const [accountExchangeById, setAccountExchangeById] = useState({});
   const [optAccounts, setOptAccounts] = useState([]);   // options-side accounts
   const [cumBot,     setCumBot]     = useState(null);
-  const [cumOpts,    setCumOpts]    = useState([]);
   const [loadingCum, setLoadingCum] = useState(false);
+  // The filters the report on screen was actually run with — distinct from
+  // the inputs above, which can be edited without pressing Load. Keeping them
+  // apart is what lets the report re-run itself when the data changes: it
+  // re-runs against what you loaded, not against a half-edited form.
+  const [appliedCum, setAppliedCum] = useState(null);
+  // Bumped whenever the underlying data changes, to re-run whatever is loaded.
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [lastSynced, setLastSynced] = useState(null);
+  // Set once the URL has been read, so the first render cannot overwrite the
+  // address bar with defaults before the saved filters are restored.
+  const [hydrated, setHydrated] = useState(false);
 
   const [accounts,        setAccounts]        = useState([]);
 
-  useEffect(() => {
-    fetch("/api/options/trades?limit=9999")
+  // Loaded once on mount used to be the whole story, which is why an edit made
+  // in another tab never reached this page: the report filtered a snapshot of
+  // the trades taken when the page opened. It is now reloadable, and reloaded
+  // whenever the data changes.
+  const reloadTrades = useCallback(() => {
+    return fetch("/api/options/trades?limit=9999", { cache: "no-store" })
       .then((r) => r.json())
       .then((j) => { if (j.error) throw new Error(j.error); setAllTrades(j.trades || []); })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingList(false));
   }, []);
+
+  useEffect(() => { reloadTrades(); }, [reloadTrades]);
+
+  // Restore the tab and the loaded report from the address bar, so a browser
+  // refresh — or a copied link — comes back to the same report rather than an
+  // empty form.
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("tab") === "cumulative") setActiveTab("cumulative");
+    const saved = {
+      exchange: sp.get("ex")   || "all",
+      symbol:   sp.get("sym")  || "all",
+      account:  sp.get("acct") || "all",
+      from:     sp.get("from") || "",
+      to:       sp.get("to")   || "",
+    };
+    setCumExchange(saved.exchange);
+    setCumSymbol(saved.symbol);
+    setCumAccount(saved.account);
+    setCumFrom(saved.from);
+    setCumTo(saved.to);
+    if (sp.get("r") === "1") setAppliedCum(saved);
+    setHydrated(true);
+  }, []);
+
+  // Mirror the tab and the loaded report back into the address bar.
+  // replaceState rather than router navigation: this is bookkeeping, not a
+  // page change, and must not stack a history entry per filter.
+  useEffect(() => {
+    if (!hydrated) return;
+    const sp = new URLSearchParams();
+    if (activeTab !== "analysis") sp.set("tab", activeTab);
+    if (appliedCum) {
+      sp.set("r", "1");
+      if (appliedCum.exchange !== "all") sp.set("ex",   appliedCum.exchange);
+      if (appliedCum.symbol   !== "all") sp.set("sym",  appliedCum.symbol);
+      if (appliedCum.account  !== "all") sp.set("acct", appliedCum.account);
+      if (appliedCum.from) sp.set("from", appliedCum.from);
+      if (appliedCum.to)   sp.set("to",   appliedCum.to);
+    }
+    const qs = sp.toString();
+    window.history.replaceState(null, "", qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+  }, [hydrated, activeTab, appliedCum]);
+
+  // Any change to the data — from this tab, another tab, another device, or a
+  // server-side worker — reloads the trades and re-runs the loaded report.
+  useDataVersion(useCallback(() => {
+    reloadTrades();
+    setRefreshTick((t) => t + 1);
+    setLastSynced(new Date());
+  }, [reloadTrades]));
 
   useEffect(() => {
     fetch("/api/bot-period-summary")
@@ -468,7 +534,7 @@ export default function OptionsAnalysis() {
       .then((j) => { if (j.error) throw new Error(j.error); setTrade(j.trade); setBotData(null); })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingTrade(false));
-  }, [selectedId]);
+  }, [selectedId, refreshTick]);
 
   useEffect(() => {
     if (!trade || !selectedAccount) { setBotData(null); return; }
@@ -488,34 +554,58 @@ export default function OptionsAnalysis() {
       .finally(() => setLoadingBot(false));
   }, [trade, selectedAccount]);
 
+  // "Load Report" records the filters as applied; the effect below and the
+  // options filter after it both read from that record. Clearing cumBot first
+  // blanks the report on a deliberate load, so a new selection never shows the
+  // previous one's numbers while it fetches.
   function loadCumulative() {
-    setLoadingCum(true);
     setCumBot(null);
+    setAppliedCum({
+      from: cumFrom, to: cumTo, symbol: cumSymbol, account: cumAccount, exchange: cumExchange,
+    });
+  }
+
+  // The bot half, fetched for the applied filters — and again on every data
+  // change. A background refresh deliberately does NOT clear cumBot first:
+  // the report stays on screen and simply updates in place, instead of
+  // flickering away every time another tab saves.
+  useEffect(() => {
+    if (!appliedCum) return;
+    let cancelled = false;
+    setLoadingCum(true);
     // Either bound may be omitted: no dates at all means the full history,
     // one date means open-ended on that side.
     const p = new URLSearchParams();
-    if (cumFrom) p.set("date_from", cumFrom);
-    if (cumTo)   p.set("date_to",   cumTo);
-    if (cumAccount !== "all") p.set("account", cumAccount);
-    if (cumSymbol  !== "all") p.set("symbol",  botSymbolPrefix(cumSymbol));
-    if (cumExchange !== "all") p.set("exchange", cumExchange);
-    fetch(`/api/cumulative-report?${p}`)
+    if (appliedCum.from) p.set("date_from", appliedCum.from);
+    if (appliedCum.to)   p.set("date_to",   appliedCum.to);
+    if (appliedCum.account  !== "all") p.set("account",  appliedCum.account);
+    if (appliedCum.symbol   !== "all") p.set("symbol",   botSymbolPrefix(appliedCum.symbol));
+    if (appliedCum.exchange !== "all") p.set("exchange", appliedCum.exchange);
+    fetch(`/api/cumulative-report?${p}`, { cache: "no-store" })
       .then((r) => r.json())
-      .then((j) => { if (j.error) throw new Error(j.error); setCumBot(j); })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoadingCum(false));
-    // Options: filter allTrades client-side
-    const acctFilter = optionsAccountFilter(cumAccount);
-    const opts = allTrades.filter((t) => {
+      .then((j) => { if (cancelled) return; if (j.error) throw new Error(j.error); setCumBot(j); })
+      .catch((e) => { if (!cancelled) setError(e.message); })
+      .finally(() => { if (!cancelled) setLoadingCum(false); });
+    return () => { cancelled = true; };
+  }, [appliedCum, refreshTick]);
+
+  // The options half, derived rather than stored. It used to be a snapshot
+  // taken when Load was pressed, so it could never reflect a later edit even
+  // after the trades reloaded. Computed each render from the current trades it
+  // updates the moment they do — and filtering a few hundred rows is free.
+  const cumOpts = !appliedCum ? [] : (() => {
+    const { from, to, symbol, account, exchange } = appliedCum;
+    const acctFilter = optionsAccountFilter(account);
+    return allTrades.filter((t) => {
       const d = t.entry_date ? toLocalDateStr(t.entry_date) : null;
       if (!d || d === "0000-00-00") return false;
-      if (cumFrom && d < cumFrom) return false;
-      if (cumTo   && d > cumTo)   return false;
-      if (cumSymbol !== "all" && canonToken(t.token) !== cumSymbol) return false;
+      if (from && d < from) return false;
+      if (to   && d > to)   return false;
+      if (symbol !== "all" && canonToken(t.token) !== symbol) return false;
       // Keep the options half on the same exchange as the bot half, or
       // Combined PNL would add a Deribit-only bot total to an all-venue
       // options total.
-      if (cumExchange !== "all" && tradeExchange(t) !== cumExchange) return false;
+      if (exchange !== "all" && tradeExchange(t) !== exchange) return false;
       // Account was previously applied only to the bot half, so SOL-HFT1 and
       // SOL-HIDDEN returned an identical options total.
       if (acctFilter) {
@@ -525,8 +615,7 @@ export default function OptionsAnalysis() {
       }
       return true;
     });
-    setCumOpts(opts);
-  }
+  })();
 
   /* Derived */
   const dateFrom = trade?.entry_date ? toLocalDateStr(trade.entry_date) : null;
@@ -946,7 +1035,21 @@ export default function OptionsAnalysis() {
         <div className="space-y-5">
             {/* Filters + date range */}
             <div className="rounded-xl border border-slate-100 bg-white p-5 shadow-card">
-              <h2 className="text-sm font-bold text-slate-700 mb-4">Select Date Range &amp; Filters</h2>
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-bold text-slate-700">Select Date Range &amp; Filters</h2>
+                {/* Says the report is live, so nobody has to wonder whether an
+                    edit made in another tab has been picked up. */}
+                {appliedCum && (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
+                    <span className={`h-1.5 w-1.5 rounded-full ${loadingCum ? "bg-amber-400 animate-pulse" : "bg-emerald-500"}`} />
+                    {loadingCum
+                      ? "Updating…"
+                      : lastSynced
+                        ? `Auto-updates when data changes · refreshed ${lastSynced.toLocaleTimeString()}`
+                        : "Auto-updates when data changes"}
+                  </span>
+                )}
+              </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-500 uppercase tracking-wide">Exchange</label>
