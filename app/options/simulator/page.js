@@ -181,6 +181,36 @@ function tradeToForm(t) {
   };
 }
 
+// Saved legs as the edit screen should show them: CALL legs first, then PUT
+// legs, each group in the order it was saved. The saved row ids are returned in
+// the same order, because Update writes legs[i] to ids[i] — sorting one without
+// the other would write each leg onto a different leg's row.
+//
+// This only runs when a saved strategy is opened. Cards are deliberately NOT
+// re-sorted while a structure is being built, so a card never jumps position
+// the moment its type is changed.
+//
+// Basket Distance and Basket Loss describe the structure, not a leg, and the
+// book stores them on exactly one leg — Leg 1 in some strategies, a later leg
+// in most. They are gathered onto Leg 1, which is the only card that shows
+// them. The value moves rather than being copied, so the structure's MM loss is
+// still counted exactly once.
+function orderSavedLegs(members) {
+  const isCall = (t) => detectLegType(t).startsWith("CALL");
+  const ordered = [...members.filter(isCall), ...members.filter((t) => !isCall(t))];
+  const legs = ordered.map((t) => ({ type: detectLegType(t), form: tradeToForm(t) }));
+
+  const empty = (v) => v === "" || v == null || Number(v) === 0;
+  for (const key of ["basket_distance", "basket_loss"]) {
+    if (!legs.length || !empty(legs[0].form[key])) continue;
+    const donor = legs.find((l, i) => i > 0 && !empty(l.form[key]));
+    if (!donor) continue;
+    legs[0].form[key] = donor.form[key];
+    donor.form[key] = "";
+  }
+  return { legs, ids: ordered.map((t) => t.id) };
+}
+
 const makeLeg = (type = "CALL LONG") => ({
   type,
   form: { ...EMPTY, option_type: type.startsWith("CALL") ? "CALL" : "PUT", iv: "" },
@@ -286,8 +316,9 @@ function SimulatorInner() {
         if (j.error) throw new Error(j.error);
         const members = j.trades || [];
         if (!members.length) throw new Error("No legs found for this group.");
-        setLegs(members.map((t) => ({ type: detectLegType(t), form: tradeToForm(t) })));
-        setEditIds(members.map((m) => m.id));
+        const { legs: orderedLegs, ids } = orderSavedLegs(members);
+        setLegs(orderedLegs);
+        setEditIds(ids);
         // Restore the account this group was actually saved with.
         const savedAcctId = members[0]?.account_id;
         if (savedAcctId) setSelectedAcct(String(savedAcctId));
@@ -1582,7 +1613,7 @@ function SimulatorInner() {
           </div>
 
           {/* Scenario clock. Only the Black-Scholes rows move with it — the
-              "Est. Net" figures above are expiry payoffs and have no time
+              "Net ... Pnl Expiry" figures above are expiry payoffs and have no time
               value to decay, so they are unaffected by design. */}
           <div className="mb-4 rounded-lg border border-indigo-100 bg-indigo-50/60 px-4 py-3">
             <div className="flex flex-wrap items-center gap-3">
@@ -2214,7 +2245,7 @@ function ScenarioBlock({ title, legs, perLeg, totals, scenario, bsToday, bsLabel
         <span className={`text-xs font-semibold ${totals.mm >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmtCcy(totals.mm)}</span>
       </div>
       <div className="flex justify-between pt-3 pb-1 border-b border-slate-200">
-        <span className="text-sm font-bold text-slate-700">Est. Net {scenario === "up" ? "Upside" : "Downside"}</span>
+        <span className="text-sm font-bold text-slate-700">Net {scenario === "up" ? "Upside" : "Downside"} Pnl Expiry</span>
         <span className={`text-base font-extrabold ${totals.net >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmtCcy(totals.net)}</span>
       </div>
       {bsToday != null && (
@@ -2232,7 +2263,7 @@ function ScenarioBlock({ title, legs, perLeg, totals, scenario, bsToday, bsLabel
             <span className={`text-xs font-semibold ${totals.mm >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmtCcy(totals.mm)}</span>
           </div>
           <div className="flex justify-between pt-2 pb-1 bg-indigo-50 -mx-4 px-4 rounded-b-lg mt-1">
-            <span className="text-sm font-bold text-indigo-700">Total BS {scenario === "up" ? "Upside" : "Downside"}</span>
+            <span className="text-sm font-bold text-indigo-700">Today {scenario === "up" ? "Upside" : "Downside"} Pnl</span>
             <span className={`text-base font-extrabold ${(bsToday + totals.fut + totals.mm) >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmtCcy(bsToday + totals.fut + totals.mm)}</span>
           </div>
         </>
