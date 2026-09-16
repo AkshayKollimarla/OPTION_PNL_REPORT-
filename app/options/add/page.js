@@ -399,7 +399,9 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
       ]);
       const [optData, futData] = await Promise.all([optRes.json(), futRes.json()]);
 
-      if (optRes.ok && optData.mark_price_usd != null) {
+      // Only a positive price is a price — a missing quote must not be
+      // written over the entry price as 0.
+      if (optRes.ok && Number(optData.mark_price_usd) > 0) {
         setTickerInfo({ ...optData, instrument: inst });
         setOptMidPriceRaw(optData.mid_price_raw ?? optData.mark_price_raw ?? 0);
         const optLocked = optFillLockedRef.current && optFillLockedInstRef.current === inst;
@@ -410,7 +412,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
         }));
       }
 
-      if (futRes.ok && futData.mark_price != null) {
+      if (futRes.ok && Number(futData.mark_price) > 0) {
         setFutMidPrice(futData.mid_price ?? futData.mark_price ?? 0);
         const futLocked = futFillLockedRef.current && futFillLockedInstRef.current === futInst;
         if (!futLocked) {
@@ -1296,7 +1298,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
                     &nbsp;· bid&nbsp;${Number(tickerInfo.best_bid_usd).toFixed(4)}
                     &nbsp;· ask&nbsp;${Number(tickerInfo.best_ask_usd).toFixed(4)}
                     &nbsp;· IV&nbsp;
-                    <span className="font-semibold text-slate-600">{Number(tickerInfo.mark_iv).toFixed(1)}%</span>
+                    <span className="font-semibold text-slate-600">{tickerInfo.mark_iv != null ? `${Number(tickerInfo.mark_iv).toFixed(1)}%` : "—"}</span>
                     &nbsp;· index&nbsp;${Number(tickerInfo.underlying_price).toFixed(2)}
                   </span>
                 )}

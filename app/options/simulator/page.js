@@ -1821,6 +1821,8 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
   const [chainError,     setChainError]     = useState(null);
   const [tickerInfo,     setTickerInfo]     = useState(null);
   const [fetchingTicker, setFetchingTicker] = useState(false);
+  // Why the last refresh returned no price, shown beside the button.
+  const [tickerError,    setTickerError]    = useState(null);
   const chainTimerRef = useRef(null);
   // When true, saved DB values are preserved — auto-populating from live data won't overwrite them.
   // Set when form is loaded from DB (token changes from empty → value with saved data).
@@ -1896,7 +1898,7 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
     const inst  = buildDeribitInst(token, form.expiry, form.options_strike, form.option_type);
     if (!inst) return;
     let cancelled = false;
-    setFetchingTicker(true); setTickerInfo(null);
+    setFetchingTicker(true); setTickerInfo(null); setTickerError(null);
     fetch(`/api/market?account_id=${accountId}&token=${token}&action=ticker&instrument=${encodeURIComponent(inst)}`)
       .then(r => r.json())
       .then(data => {
@@ -1922,6 +1924,7 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
     const futInst = buildFuturesInst(token, form.fut_instrument_type);
     if (!accountId) return;
     setFetchingTicker(true);
+    setTickerError(null);
     try {
       const [optRes, futRes] = await Promise.all([
         inst ? fetch(`/api/market?account_id=${accountId}&token=${token}&action=ticker&instrument=${encodeURIComponent(inst)}`) : Promise.resolve(null),
@@ -1933,13 +1936,19 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
       ]);
 
       const update = {};
-      if (optRes && optRes.ok && optData?.mark_price_usd != null) {
+      // Only a positive price is a price. A missing quote used to arrive as 0,
+      // which passed a "not null" test and was written over the saved entry
+      // price — refreshing an expired leg zeroed it.
+      if (optRes && optRes.ok && Number(optData?.mark_price_usd) > 0) {
         setTickerInfo({ ...optData, instrument: inst });
         update.opt_entry_price   = fmtOptPrice(optData.mark_price_usd, optData);
         update.iv                = optData.mark_iv != null ? String(Math.round(optData.mark_iv * 10) / 10) : form.iv;
         update.opt_mid_price_raw = String(optData.mid_price_raw ?? optData.mark_price_raw ?? "");
       }
-      if (futRes.ok && futData?.mark_price != null) {
+      else if (inst) {
+        setTickerError(optData?.error || "No live quote returned for this option.");
+      }
+      if (futRes.ok && Number(futData?.mark_price) > 0) {
         update.fut_entry_price = String(Math.round(futData.mark_price * 100) / 100);
         update.fut_mid_price   = String(futData.mid_price ?? futData.mark_price ?? "");
       }
@@ -2108,9 +2117,12 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
                 &nbsp;· bid&nbsp;${Number(tickerInfo.best_bid_usd).toFixed(4)}
                 &nbsp;· ask&nbsp;${Number(tickerInfo.best_ask_usd).toFixed(4)}
                 &nbsp;· IV&nbsp;
-                <span className="font-semibold text-slate-600">{Number(tickerInfo.mark_iv).toFixed(1)}%</span>
+                <span className="font-semibold text-slate-600">{tickerInfo.mark_iv != null ? `${Number(tickerInfo.mark_iv).toFixed(1)}%` : "—"}</span>
                 &nbsp;· index&nbsp;${Number(tickerInfo.underlying_price).toFixed(2)}
               </span>
+            )}
+            {tickerError && !fetchingTicker && (
+              <span className="text-xs font-medium text-amber-700">{tickerError}</span>
             )}
           </div>
         )}

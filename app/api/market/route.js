@@ -8,6 +8,7 @@ import {
   fetchOptionTicker as alpacaTicker,
   searchSymbols as alpacaSearch,
   fetchAssets as alpacaAssets,
+  isExpired as alpacaIsExpired,
 } from "../../../lib/alpaca";
 
 // Crypto tokens the Deribit book trades, offered when nothing has been typed.
@@ -186,9 +187,9 @@ export async function GET(request) {
         // the underlying share price answers instead — which is what
         // fut_entry_price holds for these strategies.
         const u = await alpacaUnderlying(token, apiKey, apiSecret).catch(() => null);
-        if (!u || !u.mid) {
+        if (!u || !(u.mid > 0)) {
           return NextResponse.json(
-            { error: `No quote available for ${token}.` },
+            { error: `No two-sided quote for ${token} right now, so there is no mid price.` },
             { status: 200 }
           );
         }
@@ -210,10 +211,26 @@ export async function GET(request) {
             { status: 400 }
           );
         }
-        const data = await alpacaTicker(parts, apiKey, apiSecret);
-        if (!data.mark_price_usd) {
+        // An expired option has no market, so there is nothing to ask Alpaca
+        // for. Said plainly, because a closed strategy opened for editing is
+        // usually past its expiry and a silent refresh reads as a fault.
+        if (alpacaIsExpired(parts.expiry)) {
           return NextResponse.json(
-            { error: `No quote for ${data.instrument}. It may not be listed, or the market is closed with no resting bid or offer.`, ...data },
+            { error: `${instrument} expired on ${parts.expiry} — there is no live quote for an expired option.`, expired: true },
+            { status: 200 }
+          );
+        }
+        const data = await alpacaTicker(parts, apiKey, apiSecret);
+        // No mid, no price. The price fields are deliberately NOT spread into
+        // this reply: a zero here was read by the entry forms as a real price
+        // and written over the saved entry price.
+        if (!(data.mark_price_usd > 0)) {
+          return NextResponse.json(
+            {
+              error: `No two-sided quote for ${data.instrument} right now, so there is no mid price. The market may be closed or the contract thinly traded.`,
+              instrument: data.instrument,
+              feed: data.feed,
+            },
             { status: 200 }
           );
         }
