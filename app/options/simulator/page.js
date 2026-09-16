@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { computeDerived, strikeNumber } from "../../../lib/options-calculations";
 import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
 import TokenSelect from "../../../components/TokenSelect";
+import { chainReloadAction, usMarketToday } from "../../../lib/chain-reload";
 
 const RISK_FREE = 0.05;
 
@@ -1766,29 +1767,6 @@ export default function CombinedSimulator() {
 
 /* ── Leg Card ─────────────────────────────────────────── */
 
-// Whether a card should have the nearest live expiry chosen for it after its
-// option chain loads.
-//
-// Only when the card has no expiry at all (a brand-new leg), or its token was
-// just switched to one that does not list the expiry it holds. Never otherwise:
-// a saved strategy's expiry and strike stay exactly as saved until they are
-// changed by hand — even when that expiry has passed and is no longer listed.
-// This used to hinge on the card's "preserve saved values" flag, which Refresh
-// clears; after one refresh, any reload of the chain silently moved that card
-// to the nearest expiry and wiped its strike, without touching the other legs.
-function shouldPickNearestExpiry({ currentExpiry, listedExpiries, previousToken, token }) {
-  if (!currentExpiry) return true;
-  const tokenSwitched = Boolean(previousToken) && previousToken !== token;
-  const listed = (listedExpiries || []).some((e) => e.date === currentExpiry);
-  return tokenSwitched && !listed;
-}
-
-// Today's date on the US options calendar, to label a saved expiry that has
-// passed. New York, not UTC — an option trades until its expiry day ends there.
-function usMarketToday() {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-}
-
 const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, form, set, setBulk, derived, canRemove, onRemove, accountId, isSyncMaster = false, syncOverrides = {}, onRelinkField, compact = false, masterForm = null, syncedKeys = [] }, ref) {
   const inp   = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
   const style = LEG_STYLES[legType];
@@ -1907,10 +1885,16 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
           setLiveExpiries(data.expiries);
           const previousToken = chainTokenRef.current;
           chainTokenRef.current = token;
-          if (shouldPickNearestExpiry({
+          // Saved expiry and strike stay as saved; see lib/chain-reload.js.
+          // Applied through setBulk, so it touches this card only.
+          const { pickExpiry, clearStrike } = chainReloadAction({
             currentExpiry: form.expiry, listedExpiries: data.expiries, previousToken, token,
-          })) {
-            setBulk({ expiry: data.expiries[0].date, options_strike: "" });
+          });
+          if (pickExpiry || clearStrike) {
+            setBulk({
+              ...(pickExpiry ? { expiry: data.expiries[0].date } : {}),
+              ...(clearStrike ? { options_strike: "" } : {}),
+            });
           }
           fetch(`/api/market?account_id=${accountId}&token=${token}&action=futures&instrument=${encodeURIComponent(buildFuturesInst(token, form.fut_instrument_type))}`)
             .then(r => r.json())

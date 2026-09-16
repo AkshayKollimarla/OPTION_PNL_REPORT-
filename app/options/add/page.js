@@ -7,6 +7,7 @@ import { computeDerived, strikeNumber } from "../../../lib/options-calculations"
 import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
 import ExitAllModal from "../../../components/ExitAllModal";
 import TokenSelect from "../../../components/TokenSelect";
+import { chainReloadAction, usMarketToday } from "../../../lib/chain-reload";
 
 const RISK_FREE = 0.05;
 
@@ -108,6 +109,9 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   // expiry/strike/prices when editing a strategy that already has data —
   // cleared the moment the user explicitly changes token/expiry/strike.
   const preserveRef = useRef(!!(isEdit && initialData?.expiry));
+  // The token the option chain was last loaded for, to tell a token switch
+  // apart from an ordinary reload (an account change, a refresh).
+  const chainTokenRef = useRef("");
 
   // Token field: dropdown of known tokens, or manual free-text entry for
   // anything else (e.g. DOGE_USDC, MATIC, AVAX_USDC). Starts in manual mode
@@ -270,15 +274,26 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
         if (!data.expiries?.length) setChainError(data.error || `No option chain returned for ${token}.`);
         if (res.ok && data.expiries?.length) {
           setLiveExpiries(data.expiries);
-          if (preserveRef.current) {
-            // Editing a saved strategy — leave expiry, strike, and futures
-            // price exactly as saved. Only the expiry/strike dropdowns
-            // become available (so the user CAN switch), nothing is fetched
-            // or displayed automatically until they refresh or change a field.
-          } else {
-            // Auto-select first expiry
-            setForm(f => ({ ...f, expiry: data.expiries[0].date, options_strike: "" }));
-            // Auto-fill futures price
+          // Expiry and strike: kept as saved unless the form has none yet or
+          // the token was switched — see lib/chain-reload.js. This no longer
+          // hinges on preserveRef, which Refresh clears; after one refresh a
+          // mere account change used to jump to the nearest expiry and wipe
+          // the strike.
+          const previousToken = chainTokenRef.current;
+          chainTokenRef.current = token;
+          const { pickExpiry, clearStrike } = chainReloadAction({
+            currentExpiry: form.expiry, listedExpiries: data.expiries, previousToken, token,
+          });
+          if (pickExpiry || clearStrike) {
+            setForm(f => ({
+              ...f,
+              ...(pickExpiry ? { expiry: data.expiries[0].date } : {}),
+              ...(clearStrike ? { options_strike: "" } : {}),
+            }));
+          }
+          if (!preserveRef.current) {
+            // Auto-fill the futures price, except while editing a saved
+            // strategy, whose saved price stays until it is refreshed.
             fetch(`/api/market?account_id=${selectedAcct}&token=${token}&action=futures&instrument=${encodeURIComponent(buildFuturesInst(token, form.fut_instrument_type))}`)
               .then(r => r.json())
               .then(d => {
@@ -1258,12 +1273,27 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
             {/* Expiry — dropdown when live, date-picker otherwise */}
             <Field label="Expiry Date">
               {hasLiveData ? (
-                <select value={form.expiry} onChange={e => { preserveRef.current = false; set("expiry", e.target.value); set("options_strike", ""); }} className={inp}>
+                <select
+                  value={form.expiry}
+                  onChange={e => {
+                    preserveRef.current = false;
+                    const next = e.target.value;
+                    // Moving to another expiry keeps the strike when the new
+                    // expiry lists it; otherwise it is cleared rather than left
+                    // pointing at a contract that does not exist.
+                    const validStrikes = liveExpiries.find(x => x.date === next)?.strikes || [];
+                    const keep = validStrikes.some(v => Number(v) === Number(form.options_strike));
+                    setForm(f => ({ ...f, expiry: next, ...(keep ? {} : { options_strike: "" }) }));
+                  }}
+                  className={inp}
+                >
                   {/* Saved expiry isn't in the live (unexpired) list anymore — inject it
                       so the dropdown shows what's actually selected instead of silently
                       falling back to the first live option while state stays stale. */}
                   {form.expiry && !liveExpiries.some(e => e.date === form.expiry) && (
-                    <option value={form.expiry}>{form.expiry} — expired, not tradeable</option>
+                    <option value={form.expiry}>
+                      {form.expiry} ({form.expiry < usMarketToday() ? "expired" : "not listed"})
+                    </option>
                   )}
                   {liveExpiries.map(e => (
                     <option key={e.date} value={e.date}>{e.label} ({e.date})</option>
@@ -1283,6 +1313,14 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
                   className={inp}
                 >
                   <option value="">— Select strike —</option>
+                  {/* A saved strike this expiry does not list stays visible as
+                      the selected value, rather than the dropdown reading
+                      "Select strike" while a strike is still stored. */}
+                  {form.options_strike && !liveStrikes.some(v => String(v) === String(form.options_strike)) && (
+                    <option value={form.options_strike}>
+                      {form.options_strike}{liveStrikes.some(v => Number(v) === Number(form.options_strike)) ? "" : " (not listed)"}
+                    </option>
+                  )}
                   {liveStrikes.map(s => (
                     <option key={s} value={String(s)}>{Number(s).toLocaleString()}</option>
                   ))}
