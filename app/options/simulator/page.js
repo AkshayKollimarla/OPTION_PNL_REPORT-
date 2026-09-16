@@ -436,7 +436,7 @@ function SimulatorInner() {
   // to.
   const sideOf = (legType) => ((legType || "").startsWith("CALL") ? "CALL" : "PUT");
 
-  function setLegField(idx, key, value) {
+  function setLegField(idx, key, value, opts = {}) {
     const synced = SYNCED_KEYS.includes(key);
     // A quantity typed on a card that is not the first one carries to the
     // other legs on ITS side of the structure, not to every card.
@@ -477,7 +477,13 @@ function SimulatorInner() {
         }
         if (synced && idx === masterLegIdx && !(l.overrides || {})[key]) {
           const patch = { [key]: syncedValueFor(key, value, l.type) };
-          if (STRIKE_INVALIDATING.includes(key)) patch.options_strike = "";
+          if (STRIKE_INVALIDATING.includes(key)) {
+            // A token change always clears the strike — it belongs to another
+            // underlying. An expiry change keeps it when the new expiry lists it.
+            const valid = key === "expiry" ? opts.validStrikes : null;
+            const keep = Array.isArray(valid) && valid.some((v) => Number(v) === Number(l.form.options_strike));
+            if (!keep) patch.options_strike = "";
+          }
           return { ...l, form: { ...l.form, ...patch } };
         }
         return l;
@@ -1562,7 +1568,7 @@ function SimulatorInner() {
                   legType={leg.type}
                   onLegTypeChange={(t) => changeLegType(idx, t)}
                   form={leg.form}
-                  set={(k, v) => setLegField(idx, k, v)}
+                  set={(k, v, opts) => setLegField(idx, k, v, opts)}
                   setBulk={(updates) => setLegBulk(idx, updates)}
                   isSyncMaster={idx === masterLegIdx}
                   syncOverrides={leg.overrides || {}}
@@ -1760,6 +1766,29 @@ export default function CombinedSimulator() {
 
 /* ── Leg Card ─────────────────────────────────────────── */
 
+// Whether a card should have the nearest live expiry chosen for it after its
+// option chain loads.
+//
+// Only when the card has no expiry at all (a brand-new leg), or its token was
+// just switched to one that does not list the expiry it holds. Never otherwise:
+// a saved strategy's expiry and strike stay exactly as saved until they are
+// changed by hand — even when that expiry has passed and is no longer listed.
+// This used to hinge on the card's "preserve saved values" flag, which Refresh
+// clears; after one refresh, any reload of the chain silently moved that card
+// to the nearest expiry and wiped its strike, without touching the other legs.
+function shouldPickNearestExpiry({ currentExpiry, listedExpiries, previousToken, token }) {
+  if (!currentExpiry) return true;
+  const tokenSwitched = Boolean(previousToken) && previousToken !== token;
+  const listed = (listedExpiries || []).some((e) => e.date === currentExpiry);
+  return tokenSwitched && !listed;
+}
+
+// Today's date on the US options calendar, to label a saved expiry that has
+// passed. New York, not UTC — an option trades until its expiry day ends there.
+function usMarketToday() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+}
+
 const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, form, set, setBulk, derived, canRemove, onRemove, accountId, isSyncMaster = false, syncOverrides = {}, onRelinkField, compact = false, masterForm = null, syncedKeys = [] }, ref) {
   const inp   = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
   const style = LEG_STYLES[legType];
@@ -1835,6 +1864,9 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
   // Set when form is loaded from DB (token changes from empty → value with saved data).
   // Cleared when user explicitly changes expiry, strike, or token.
   const preserveRef  = useRef(false);
+  // The token this card's option chain was last loaded for, to tell a token
+  // switch apart from an ordinary chain reload.
+  const chainTokenRef = useRef("");
   const prevTokenRef = useRef("");
   // Net Booked PnL = Futures PnL + Options PnL + Market Making PL — always
   // derived, never typed directly. Recomputes whenever any of the three
@@ -1873,8 +1905,11 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
         if (!res.ok) { setChainError(data.error || `HTTP ${res.status}`); return; }
         if (data.expiries?.length) {
           setLiveExpiries(data.expiries);
-          // Only auto-select first expiry/clear strike when NOT preserving saved values
-          if (!preserveRef.current) {
+          const previousToken = chainTokenRef.current;
+          chainTokenRef.current = token;
+          if (shouldPickNearestExpiry({
+            currentExpiry: form.expiry, listedExpiries: data.expiries, previousToken, token,
+          })) {
             setBulk({ expiry: data.expiries[0].date, options_strike: "" });
           }
           fetch(`/api/market?account_id=${accountId}&token=${token}&action=futures&instrument=${encodeURIComponent(buildFuturesInst(token, form.fut_instrument_type))}`)
@@ -2029,7 +2064,31 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
           {/* Expiry — dropdown when live */}
           {show("expiry") && <F label={syncLabel("expiry", hasLiveData ? "Expiry (live)" : "Expiry Date")}>
             {hasLiveData ? (
-              <select value={form.expiry} onChange={e => { preserveRef.current = false; set("expiry", e.target.value); set("options_strike", ""); }} className={inp}>
+              <select
+                value={form.expiry}
+                onChange={e => {
+                  preserveRef.current = false;
+                  const next = e.target.value;
+                  // Rolling to another expiry keeps each leg's strike where the
+                  // new expiry lists it, so re-running a structure for a later
+                  // date needs only a new expiry and a refresh. A strike the new
+                  // expiry does not list is cleared, never left pointing at a
+                  // contract that does not exist.
+                  const validStrikes = liveExpiries.find(x => x.date === next)?.strikes || [];
+                  set("expiry", next, { validStrikes });
+                  if (!validStrikes.some(v => Number(v) === Number(form.options_strike))) set("options_strike", "");
+                }}
+                className={inp}
+              >
+                {/* A saved expiry that is no longer listed — usually one that has
+                    passed — is still shown as the selected value. Without it the
+                    browser displayed the first live expiry instead, so the card
+                    appeared to be on a date it was not. */}
+                {form.expiry && !liveExpiries.some(x => x.date === form.expiry) && (
+                  <option value={form.expiry}>
+                    {form.expiry} ({form.expiry < usMarketToday() ? "expired" : "not listed"})
+                  </option>
+                )}
                 {liveExpiries.map(e => (
                   <option key={e.date} value={e.date}>{e.label} ({e.date})</option>
                 ))}
@@ -2044,6 +2103,11 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
             {hasLiveData && liveStrikes.length > 0 ? (
               <select value={form.options_strike} onChange={e => { preserveRef.current = false; set("options_strike", e.target.value); }} className={inp}>
                 <option value="">— Select strike —</option>
+                {form.options_strike && !liveStrikes.some(v => String(v) === String(form.options_strike)) && (
+                  <option value={form.options_strike}>
+                    {form.options_strike}{liveStrikes.some(v => Number(v) === Number(form.options_strike)) ? "" : " (not listed)"}
+                  </option>
+                )}
                 {liveStrikes.map(s => (
                   <option key={s} value={String(s)}>{Number(s).toLocaleString()}</option>
                 ))}
