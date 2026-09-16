@@ -54,8 +54,15 @@ const n = (v) => Number(v) || 0;
 // the coin-denominated premium and says nothing about the converted USD
 // figure, so those keep the generic 4dp.
 function fmtOptPrice(value, ticker) {
+  // A missing price is blank, never "0": Number(null) is 0, and a zero written
+  // into the form reads as a real price and gets saved over the entry.
+  if (value === null || value === undefined || value === "") return "";
   const n = Number(value);
   if (!Number.isFinite(n)) return "";
+  // Alpaca prices are exact mids and are recorded as such — 20.795, not 20.80.
+  // Only Deribit prices are snapped to the tick, where an off-tick mark is not
+  // a price anyone can trade.
+  if (ticker?.exact_price) return String(n);
   if (ticker?.is_linear && ticker?.tick_size > 0) {
     return n.toFixed(Math.max(0, -Math.floor(Math.log10(ticker.tick_size))));
   }
@@ -1949,7 +1956,9 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
         setTickerError(optData?.error || "No live quote returned for this option.");
       }
       if (futRes.ok && Number(futData?.mark_price) > 0) {
-        update.fut_entry_price = String(Math.round(futData.mark_price * 100) / 100);
+        update.fut_entry_price = futData.exact_price
+          ? String(futData.mark_price)
+          : String(Math.round(futData.mark_price * 100) / 100);
         update.fut_mid_price   = String(futData.mid_price ?? futData.mark_price ?? "");
       }
       if (Object.keys(update).length) setBulk(update);

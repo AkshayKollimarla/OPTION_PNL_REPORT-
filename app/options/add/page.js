@@ -18,8 +18,15 @@ const RISK_FREE = 0.05;
 // the coin-denominated premium and says nothing about the converted USD
 // figure, so those keep the generic 4dp.
 function fmtOptPrice(value, ticker) {
+  // A missing price is blank, never "0": Number(null) is 0, and a zero written
+  // into the form reads as a real price and gets saved over the entry.
+  if (value === null || value === undefined || value === "") return "";
   const n = Number(value);
   if (!Number.isFinite(n)) return "";
+  // Alpaca prices are exact mids and are recorded as such — 20.795, not 20.80.
+  // Only Deribit prices are snapped to the tick, where an off-tick mark is not
+  // a price anyone can trade.
+  if (ticker?.exact_price) return String(n);
   if (ticker?.is_linear && ticker?.tick_size > 0) {
     return n.toFixed(Math.max(0, -Math.floor(Math.log10(ticker.tick_size))));
   }
@@ -416,7 +423,12 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
         setFutMidPrice(futData.mid_price ?? futData.mark_price ?? 0);
         const futLocked = futFillLockedRef.current && futFillLockedInstRef.current === futInst;
         if (!futLocked) {
-          setForm(f => ({ ...f, fut_entry_price: String(Math.round(futData.mark_price * 100) / 100) }));
+          setForm(f => ({
+            ...f,
+            fut_entry_price: futData.exact_price
+              ? String(futData.mark_price)
+              : String(Math.round(futData.mark_price * 100) / 100),
+          }));
         }
       }
     } finally {

@@ -200,6 +200,8 @@ export async function GET(request) {
           best_bid:    u.bid,
           best_ask:    u.ask,
           mid_price:   u.mid,
+          // Tells the pages to fill this as-is rather than round it to cents.
+          exact_price: true,
         });
       }
 
