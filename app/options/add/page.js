@@ -313,9 +313,10 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   }, [selectedAcct, form.token]);
 
   // Auto-fetch ticker when expiry/strike/option_type changes (live mode only).
-  // Skipped entirely while preserving saved data — no live price should even
-  // be fetched/displayed next to the saved entry price until the user
-  // explicitly refreshes or changes token/expiry/strike.
+  // Skipped entirely while preserving saved data — for a saved strategy no
+  // live price is fetched or displayed beside the saved one until Refresh is
+  // pressed. A new strategy is not preserving anything, so it still fills in
+  // as each field is chosen.
   useEffect(() => {
     if (preserveRef.current) return;
     if (!selectedAcct || !liveExpiries.length || !form.options_strike || !form.expiry) {
@@ -1231,7 +1232,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
               <TokenSelect
                 accountId={selectedAcct}
                 value={form.token}
-                onChange={(v) => { preserveRef.current = false; set("token", v); }}
+                onChange={(v) => { set("token", v); }}
               />
             </Field>
             <Field label="Option Type">
@@ -1276,7 +1277,6 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
                 <select
                   value={form.expiry}
                   onChange={e => {
-                    preserveRef.current = false;
                     const next = e.target.value;
                     // Moving to another expiry keeps the strike when the new
                     // expiry lists it; otherwise it is cleared rather than left
@@ -1300,7 +1300,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
                   ))}
                 </select>
               ) : (
-                <input type="date" value={form.expiry} onChange={e => { preserveRef.current = false; set("expiry", e.target.value); }} className={inp} />
+                <input type="date" value={form.expiry} onChange={e => { set("expiry", e.target.value); }} className={inp} />
               )}
             </Field>
 
@@ -1309,7 +1309,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
               {hasLiveData && liveStrikes.length > 0 ? (
                 <select
                   value={form.options_strike}
-                  onChange={e => { preserveRef.current = false; set("options_strike", e.target.value); }}
+                  onChange={e => { set("options_strike", e.target.value); }}
                   className={inp}
                 >
                   <option value="">— Select strike —</option>
@@ -1326,7 +1326,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
                   ))}
                 </select>
               ) : (
-                <input type="text" placeholder='e.g. "96 PUT" or "1700"' value={form.options_strike} onChange={e => { preserveRef.current = false; set("options_strike", e.target.value); }} className={inp} />
+                <input type="text" placeholder='e.g. "96 PUT" or "1700"' value={form.options_strike} onChange={e => { set("options_strike", e.target.value); }} className={inp} />
               )}
             </Field>
 
@@ -1375,7 +1375,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
               <Field label="Futures Instrument">
                 <select
                   value={form.fut_instrument_type || "inverse"}
-                  onChange={e => { preserveRef.current = false; set("fut_instrument_type", e.target.value); }}
+                  onChange={e => { set("fut_instrument_type", e.target.value); }}
                   className={inp}
                 >
                   <option value="inverse">Inverse — {(form.token || "BTC").toUpperCase()}-PERPETUAL</option>

@@ -1932,11 +1932,11 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
         setTickerInfo({ ...data, instrument: inst });
         // opt_mid_price_raw is an execution helper, not a saved field, so it
         // always tracks the live market. IV and the entry price are saved
-        // columns and belong to the strategy: opening a saved one must not
-        // quietly replace its recorded IV with today's, which Update would then
-        // write to the database. Both follow the live market only once the card
-        // stops preserving — after Refresh, or after the token, expiry or
-        // strike is changed.
+        // columns and belong to the strategy, so they change only when Refresh
+        // is pressed — the one unambiguous request for live data. Changing the
+        // token, expiry or strike no longer refills them: re-picking contracts
+        // while editing used to overwrite a recorded entry price with the live
+        // mid (2.47 became 5.315 on an NBIS leg) before anyone asked for it.
         const upd = { opt_mid_price_raw: String(data.mid_price_raw ?? data.mark_price_raw ?? "") };
         if (!preserveRef.current) {
           upd.opt_entry_price = fmtOptPrice(data.mark_price_usd, data);
@@ -2046,7 +2046,7 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
             <TokenSelect
               accountId={accountId}
               value={form.token}
-              onChange={(v) => { preserveRef.current = false; set("token", v); }}
+              onChange={(v) => { set("token", v); }}
             />
           </F>}
           {show("investment") && <F label="Investment"><input type="number" step="any" value={form.investment} onChange={(e) => set("investment", e.target.value)} className={inp} /></F>}
@@ -2057,7 +2057,6 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
               <select
                 value={form.expiry}
                 onChange={e => {
-                  preserveRef.current = false;
                   const next = e.target.value;
                   // Rolling to another expiry keeps each leg's strike where the
                   // new expiry lists it, so re-running a structure for a later
@@ -2091,7 +2090,7 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
           {/* Strike — dropdown when live */}
           <F label={hasLiveData ? "Strike (live)" : "Strike"}>
             {hasLiveData && liveStrikes.length > 0 ? (
-              <select value={form.options_strike} onChange={e => { preserveRef.current = false; set("options_strike", e.target.value); }} className={inp}>
+              <select value={form.options_strike} onChange={e => { set("options_strike", e.target.value); }} className={inp}>
                 <option value="">— Select strike —</option>
                 {form.options_strike && !liveStrikes.some(v => String(v) === String(form.options_strike)) && (
                   <option value={form.options_strike}>
@@ -2122,7 +2121,7 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
             <F label="Futures Instrument">
               <select
                 value={form.fut_instrument_type || "inverse"}
-                onChange={(e) => { preserveRef.current = false; set("fut_instrument_type", e.target.value); }}
+                onChange={(e) => { set("fut_instrument_type", e.target.value); }}
                 className={inp}
               >
                 <option value="inverse">Inverse — {(form.token || "BTC").toUpperCase()}-PERPETUAL</option>
