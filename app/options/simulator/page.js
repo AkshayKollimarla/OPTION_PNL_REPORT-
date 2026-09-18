@@ -1930,12 +1930,18 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
       .then(data => {
         if (cancelled || !data.mark_price_usd) return;
         setTickerInfo({ ...data, instrument: inst });
-        // Always update execution prices (mid_price_raw, iv); only update display price if NOT preserving
-        const upd = {
-          iv:                data.mark_iv != null ? String(Math.round(data.mark_iv * 10) / 10) : form.iv,
-          opt_mid_price_raw: String(data.mid_price_raw ?? data.mark_price_raw ?? ""),
-        };
-        if (!preserveRef.current) upd.opt_entry_price = fmtOptPrice(data.mark_price_usd, data);
+        // opt_mid_price_raw is an execution helper, not a saved field, so it
+        // always tracks the live market. IV and the entry price are saved
+        // columns and belong to the strategy: opening a saved one must not
+        // quietly replace its recorded IV with today's, which Update would then
+        // write to the database. Both follow the live market only once the card
+        // stops preserving — after Refresh, or after the token, expiry or
+        // strike is changed.
+        const upd = { opt_mid_price_raw: String(data.mid_price_raw ?? data.mark_price_raw ?? "") };
+        if (!preserveRef.current) {
+          upd.opt_entry_price = fmtOptPrice(data.mark_price_usd, data);
+          if (data.mark_iv != null) upd.iv = String(Math.round(data.mark_iv * 10) / 10);
+        }
         setBulk(upd);
       })
       .catch(() => {})
