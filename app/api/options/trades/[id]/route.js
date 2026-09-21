@@ -47,6 +47,7 @@ export async function PUT(request, { params }) {
       "fut_pnl","opt_pnl",
       "net_booked_pnl","market_making_pl","end_date","status","group_id",
       "execution_log","target_pnl","initial_collateral_usd","account_id",
+      "leg_index",
       ...DERIVED_FIELDS,
     ];
 

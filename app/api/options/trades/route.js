@@ -12,6 +12,7 @@ const MANUAL_COLS = [
   "fut_pnl","opt_pnl",
   "net_booked_pnl","market_making_pl","end_date","status","group_id",
   "execution_log","target_pnl","initial_collateral_usd","account_id",
+  "leg_index",
 ];
 const ALL_COLS = [...MANUAL_COLS, ...DERIVED_FIELDS];
 
@@ -28,11 +29,36 @@ async function ensureColumns() {
     ["fut_instrument_type",    "VARCHAR(20) NULL DEFAULT 'inverse'"],
     ["fut_pnl",                "DECIMAL(14,4) NULL"],
     ["opt_pnl",                "DECIMAL(14,4) NULL"],
+    // A leg's position among the cards of its combined strategy, 0-based.
+    // Position used to be read off the row id, which only works while legs are
+    // appended in order: a leg added in the middle of an existing structure
+    // gets the highest id and would reappear last, wherever it was put.
+    ["leg_index",              "INT NULL"],
   ]) {
     try { await pool.query(`ALTER TABLE options_trades ADD COLUMN ${col} ${def}`); }
     catch { /* column already exists */ }
   }
+  await backfillLegIndex();
   _colsMigrated = true;
+}
+
+// Give every leg saved before the column existed the position it is being
+// shown at today — its rank by id within its group — so old and new strategies
+// order by the same rule and no group is left half-numbered. Matches nothing
+// once it has run, so it is safe on every start.
+async function backfillLegIndex() {
+  try {
+    await pool.query(`
+      UPDATE options_trades t
+        JOIN (SELECT id, ROW_NUMBER() OVER (PARTITION BY group_id ORDER BY id) - 1 AS idx
+                FROM options_trades
+               WHERE group_id IS NOT NULL AND leg_index IS NULL) r ON r.id = t.id
+         SET t.leg_index = r.idx
+       WHERE t.leg_index IS NULL`);
+    // A strategy saved on its own has no siblings to be ordered against.
+    await pool.query(`UPDATE options_trades SET leg_index = 0
+                       WHERE group_id IS NULL AND leg_index IS NULL`);
+  } catch { /* column missing on an older server, or nothing to do */ }
 }
 
 export async function GET(request) {
@@ -123,12 +149,18 @@ export async function GET(request) {
   try {
     if (groupId) {
       // No pagination for group fetch, and a different order: the legs of one
-      // structure come back in the order they were saved, so the edit screen
-      // can rebuild the cards where the user left them. ORDER (newest first)
-      // is for the browsing lists; applied here it handed the edit screen its
-      // legs REVERSED, which is why the first card kept changing identity.
+      // structure come back at the positions they were saved at, so the edit
+      // screen rebuilds the cards where the user left them. ORDER (newest
+      // first) is for the browsing lists; applied here it handed the edit
+      // screen its legs REVERSED, which is why the first card kept changing
+      // identity.
+      //
+      // A leg with no recorded position sorts last rather than first: an
+      // unplaced leg is a new one, and arriving at the front would take over
+      // Leg 1, the card that shows every field and seeds the others.
       const [rows] = await pool.query(
-        `SELECT * FROM options_trades ${where} ORDER BY id ASC`,
+        `SELECT * FROM options_trades ${where}
+          ORDER BY COALESCE(leg_index, 999999) ASC, id ASC`,
         params
       );
       return NextResponse.json({ trades: rows });

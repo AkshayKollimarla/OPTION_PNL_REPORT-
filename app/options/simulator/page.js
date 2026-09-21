@@ -189,9 +189,10 @@ function tradeToForm(t) {
   };
 }
 
-// Saved legs as the edit screen should show them: in the order they were
-// saved, so reopening a strategy puts every card back where it was built. The
-// api returns them by ascending id for exactly this reason.
+// Saved legs as the edit screen should show them: at the positions they were
+// saved at, so reopening a strategy puts every card back where it was built.
+// Each leg carries its card position in leg_index and the api returns the
+// group in that order, so there is nothing left to work out here.
 //
 // Nothing is re-sorted here. An earlier version hoisted the CALL legs above the
 // PUT legs, which was a patch over the real fault: the api was handing back the
@@ -1276,15 +1277,14 @@ function SimulatorInner() {
       // only generate a fresh one if this strategy was never executed.
       const groupId = comboGroupIdRef.current || `combined_${Date.now()}`;
       comboGroupIdRef.current = groupId;
-      // One at a time, in card order. The row id is what restores a card's
-      // position when the strategy is reopened, and ids are handed out in the
-      // order the inserts land -- fired together, four inserts can land in any
-      // order and the cards come back shuffled.
+      // Each leg records the card it was sitting on, so reopening the
+      // strategy rebuilds the same layout. Saved one at a time so a failure
+      // part-way leaves a readable prefix rather than an arbitrary subset.
       const ids = [];
-      for (const leg of legs) {
+      for (let i = 0; i < legs.length; i++) {
         const j = await fetch("/api/options/trades", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...leg.form, group_id: groupId, account_id: selectedAcct || undefined }),
+          body: JSON.stringify({ ...legs[i].form, group_id: groupId, leg_index: i, account_id: selectedAcct || undefined }),
         }).then((r) => r.json());
         if (!j.ok && !j.id) throw new Error(j.error || "Save failed");
         ids.push(j.id);
@@ -1298,21 +1298,23 @@ function SimulatorInner() {
   async function updateStrategies() {
     setSaving(true); setSaveMsg(null); setSaveErr(null);
     try {
-      // In card order, one at a time: an existing leg keeps its own row, but a
-      // leg added while editing is a fresh insert, and its id decides where it
-      // reappears.
+      // Every leg is re-stamped with the card it now sits on, not just the
+      // new ones. Removing or adding a leg shifts the cards after it, and
+      // writing all of them keeps the stored positions contiguous and in step
+      // with what is on screen.
       for (let i = 0; i < legs.length; i++) {
         const leg = legs[i];
         const id = editIds[i];
         const acctPatch = selectedAcct ? { account_id: selectedAcct } : {};
+        const payload = { ...leg.form, group_id: editGroup, leg_index: i, ...acctPatch };
         const j = id
           ? await fetch(`/api/options/trades/${id}`, {
               method: "PUT", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ...leg.form, group_id: editGroup, ...acctPatch }),
+              body: JSON.stringify(payload),
             }).then((r) => r.json())
           : await fetch("/api/options/trades", {
               method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ...leg.form, group_id: editGroup, ...acctPatch }),
+              body: JSON.stringify(payload),
             }).then((r) => r.json());
         if (j.error) throw new Error(j.error);
         if (!id && !j.id) throw new Error("Save failed");
@@ -1328,11 +1330,11 @@ function SimulatorInner() {
     try {
       const newGroupId = `combined_${Date.now()}`;
       const ids = [];
-      for (const leg of legs) {
-        const { id: _id, ...payload } = leg.form;
+      for (let i = 0; i < legs.length; i++) {
+        const { id: _id, ...payload } = legs[i].form;
         const j = await fetch("/api/options/trades", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...payload, group_id: newGroupId, account_id: selectedAcct || undefined }),
+          body: JSON.stringify({ ...payload, group_id: newGroupId, leg_index: i, account_id: selectedAcct || undefined }),
         }).then((r) => r.json());
         if (!j.id) throw new Error(j.error || "Save failed");
         ids.push(j.id);
