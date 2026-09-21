@@ -122,9 +122,13 @@ export async function GET(request) {
   await ensureColumns();
   try {
     if (groupId) {
-      // No pagination for group fetch
+      // No pagination for group fetch, and a different order: the legs of one
+      // structure come back in the order they were saved, so the edit screen
+      // can rebuild the cards where the user left them. ORDER (newest first)
+      // is for the browsing lists; applied here it handed the edit screen its
+      // legs REVERSED, which is why the first card kept changing identity.
       const [rows] = await pool.query(
-        `SELECT * FROM options_trades ${where} ${ORDER}`,
+        `SELECT * FROM options_trades ${where} ORDER BY id ASC`,
         params
       );
       return NextResponse.json({ trades: rows });

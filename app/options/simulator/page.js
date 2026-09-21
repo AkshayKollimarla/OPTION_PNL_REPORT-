@@ -189,14 +189,16 @@ function tradeToForm(t) {
   };
 }
 
-// Saved legs as the edit screen should show them: CALL legs first, then PUT
-// legs, each group in the order it was saved. The saved row ids are returned in
-// the same order, because Update writes legs[i] to ids[i] — sorting one without
-// the other would write each leg onto a different leg's row.
+// Saved legs as the edit screen should show them: in the order they were
+// saved, so reopening a strategy puts every card back where it was built. The
+// api returns them by ascending id for exactly this reason.
 //
-// This only runs when a saved strategy is opened. Cards are deliberately NOT
-// re-sorted while a structure is being built, so a card never jumps position
-// the moment its type is changed.
+// Nothing is re-sorted here. An earlier version hoisted the CALL legs above the
+// PUT legs, which was a patch over the real fault: the api was handing back the
+// whole group newest-first, so a structure built calls-then-puts came back
+// puts-first. With the order fixed at the source, sorting on top of it would
+// only move cards again — and moving them changes which leg is the first card,
+// the one that shows every field and seeds the others.
 //
 // Basket Distance and Basket Loss describe the structure, not a leg, and the
 // book stores them on exactly one leg — Leg 1 in some strategies, a later leg
@@ -204,8 +206,7 @@ function tradeToForm(t) {
 // them. The value moves rather than being copied, so the structure's MM loss is
 // still counted exactly once.
 function orderSavedLegs(members) {
-  const isCall = (t) => detectLegType(t).startsWith("CALL");
-  const ordered = [...members.filter(isCall), ...members.filter((t) => !isCall(t))];
+  const ordered = [...members];
   const legs = ordered.map((t) => ({ type: detectLegType(t), form: tradeToForm(t) }));
 
   const empty = (v) => v === "" || v == null || Number(v) === 0;
@@ -1275,12 +1276,19 @@ function SimulatorInner() {
       // only generate a fresh one if this strategy was never executed.
       const groupId = comboGroupIdRef.current || `combined_${Date.now()}`;
       comboGroupIdRef.current = groupId;
-      const ids = await Promise.all(legs.map((leg) =>
-        fetch("/api/options/trades", {
+      // One at a time, in card order. The row id is what restores a card's
+      // position when the strategy is reopened, and ids are handed out in the
+      // order the inserts land -- fired together, four inserts can land in any
+      // order and the cards come back shuffled.
+      const ids = [];
+      for (const leg of legs) {
+        const j = await fetch("/api/options/trades", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...leg.form, group_id: groupId, account_id: selectedAcct || undefined }),
-        }).then((r) => r.json()).then((j) => { if (!j.ok && !j.id) throw new Error(j.error || "Save failed"); return j.id; })
-      ));
+        }).then((r) => r.json());
+        if (!j.ok && !j.id) throw new Error(j.error || "Save failed");
+        ids.push(j.id);
+      }
       setSaveMsg(`Saved ${ids.length} legs. Redirecting…`);
       setTimeout(() => router.push("/options"), 1800);
     } catch (err) { setSaveErr(err.message); }
@@ -1290,19 +1298,25 @@ function SimulatorInner() {
   async function updateStrategies() {
     setSaving(true); setSaveMsg(null); setSaveErr(null);
     try {
-      await Promise.all(legs.map((leg, i) => {
+      // In card order, one at a time: an existing leg keeps its own row, but a
+      // leg added while editing is a fresh insert, and its id decides where it
+      // reappears.
+      for (let i = 0; i < legs.length; i++) {
+        const leg = legs[i];
         const id = editIds[i];
         const acctPatch = selectedAcct ? { account_id: selectedAcct } : {};
-        return id
-          ? fetch(`/api/options/trades/${id}`, {
+        const j = id
+          ? await fetch(`/api/options/trades/${id}`, {
               method: "PUT", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ ...leg.form, group_id: editGroup, ...acctPatch }),
-            }).then((r) => r.json()).then((j) => { if (j.error) throw new Error(j.error); })
-          : fetch("/api/options/trades", {
+            }).then((r) => r.json())
+          : await fetch("/api/options/trades", {
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ ...leg.form, group_id: editGroup, ...acctPatch }),
-            }).then((r) => r.json()).then((j) => { if (!j.id) throw new Error(j.error || "Save failed"); });
-      }));
+            }).then((r) => r.json());
+        if (j.error) throw new Error(j.error);
+        if (!id && !j.id) throw new Error("Save failed");
+      }
       setSaveMsg("All strategies updated. Redirecting…");
       setTimeout(() => router.push("/options"), 1500);
     } catch (err) { setSaveErr(err.message); }
@@ -1313,13 +1327,16 @@ function SimulatorInner() {
     setSaving(true); setSaveMsg(null); setSaveErr(null);
     try {
       const newGroupId = `combined_${Date.now()}`;
-      const ids = await Promise.all(legs.map((leg) => {
+      const ids = [];
+      for (const leg of legs) {
         const { id: _id, ...payload } = leg.form;
-        return fetch("/api/options/trades", {
+        const j = await fetch("/api/options/trades", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...payload, group_id: newGroupId, account_id: selectedAcct || undefined }),
-        }).then((r) => r.json()).then((j) => { if (!j.id) throw new Error(j.error || "Save failed"); return j.id; });
-      }));
+        }).then((r) => r.json());
+        if (!j.id) throw new Error(j.error || "Save failed");
+        ids.push(j.id);
+      }
       setSaveMsg(`Saved as new combined group (${ids.length} legs). Redirecting…`);
       setTimeout(() => router.push("/options"), 1800);
     } catch (err) { setSaveErr(err.message); }
