@@ -433,23 +433,16 @@ function SimulatorInner() {
     return String((legType || "").endsWith("SHORT") ? -n : n);
   }
 
-  // CALL or PUT, ignoring direction — the half of the structure a leg belongs
-  // to.
-  const sideOf = (legType) => ((legType || "").startsWith("CALL") ? "CALL" : "PUT");
-
   function setLegField(idx, key, value, opts = {}) {
     const synced = SYNCED_KEYS.includes(key);
-    // A quantity typed on a card that is not the first one carries to the
-    // other legs on ITS side of the structure, not to every card.
-    //
-    // The legs of a spread are sized together: a put spread is 200 long
-    // against 200 short, and re-sizing one side while leaving its pair at the
-    // first card's quantity leaves a naked leg nobody asked for. Only the
-    // first card is a master over the whole structure; every other card
-    // governs its own half.
-    const siblingSync = synced && key === "opt_entry_qty" && idx !== masterLegIdx;
+    // Only the FIRST card sizes other legs, and only while they are still
+    // following it. A quantity typed on any other card is that card's own and
+    // moves nothing else: the legs start equal because the first card seeded
+    // them, and from there each is sized independently -- 2 / 2 out of the
+    // box, but 1.7 against 2 the moment a card is set by hand. Pairing the
+    // two halves of a spread was tried and pulled: it left a put leg unable
+    // to hold a size of its own, which is the whole point of typing one in.
     setLegs((prev) => {
-      const side = sideOf(prev[idx]?.type);
       return prev.map((l, i) => {
         if (i === idx) {
           // A typed quantity takes the card's own direction. Direction lives in
@@ -465,16 +458,6 @@ function SimulatorInner() {
             next.overrides = { ...(l.overrides || {}), [key]: true };
           }
           return next;
-        }
-        if (siblingSync && sideOf(l.type) === side) {
-          // Marked overridden as well, so a later edit to the first card does
-          // not silently undo the pair the user has just re-sized. The card's
-          // own re-link control puts it back under the first card's control.
-          return {
-            ...l,
-            overrides: { ...(l.overrides || {}), [key]: true },
-            form: { ...l.form, [key]: syncedValueFor(key, value, l.type) },
-          };
         }
         if (synced && idx === masterLegIdx && !(l.overrides || {})[key]) {
           const patch = { [key]: syncedValueFor(key, value, l.type) };
