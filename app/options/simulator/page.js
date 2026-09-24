@@ -234,7 +234,13 @@ function SimulatorInner() {
   const editGroup    = searchParams.get("edit_group");
   const isEditMode   = !!editGroup;
 
-  const [legs,          setLegs]          = useState([makeLeg("CALL LONG"), makeLeg("PUT LONG")]);
+  // The structure this book actually trades: a call spread over a put spread,
+  // laid out long-then-short on each side. Starting here rather than at two
+  // blank legs means the usual strategy is ready to fill in, and the card
+  // order matches the order it is read in. A leg that is not wanted can be
+  // removed, and Add Leg still appends a fifth.
+  const DEFAULT_LEG_TYPES = ["CALL LONG", "CALL SHORT", "PUT LONG", "PUT SHORT"];
+  const [legs,          setLegs]          = useState(() => DEFAULT_LEG_TYPES.map(makeLeg));
   const [editIds,       setEditIds]       = useState([]);
   const [loadErr,       setLoadErr]       = useState(null);
   const [saving,        setSaving]        = useState(false);
@@ -381,6 +387,8 @@ function SimulatorInner() {
   }
 
   function removeLeg(idx) {
+    // Two legs is the floor: one leg on its own is a single strategy, which
+    // the Add Strategy page already covers.
     if (legs.length <= 2) return;
     setLegs((prev)    => prev.filter((_, i) => i !== idx));
     setEditIds((prev) => prev.filter((_, i) => i !== idx));
