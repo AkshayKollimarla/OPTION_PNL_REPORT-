@@ -242,6 +242,10 @@ function SimulatorInner() {
   const DEFAULT_LEG_TYPES = ["CALL LONG", "CALL SHORT", "PUT LONG", "PUT SHORT"];
   const [legs,          setLegs]          = useState(() => DEFAULT_LEG_TYPES.map(makeLeg));
   const [editIds,       setEditIds]       = useState([]);
+  // Saved legs the user has removed from the screen. Their rows still exist,
+  // and Update is what actually deletes them -- removing a card is not on its
+  // own a database change, so backing out of the page changes nothing.
+  const [removedIds,    setRemovedIds]    = useState([]);
   const [loadErr,       setLoadErr]       = useState(null);
   const [saving,        setSaving]        = useState(false);
   const [saveMsg,       setSaveMsg]       = useState(null);
@@ -335,6 +339,7 @@ function SimulatorInner() {
         const { legs: orderedLegs, ids } = orderSavedLegs(members);
         setLegs(orderedLegs);
         setEditIds(ids);
+        setRemovedIds([]);
         // Restore the account this group was actually saved with.
         const savedAcctId = members[0]?.account_id;
         if (savedAcctId) setSelectedAcct(String(savedAcctId));
@@ -390,6 +395,12 @@ function SimulatorInner() {
     // Two legs is the floor: one leg on its own is a single strategy, which
     // the Add Strategy page already covers.
     if (legs.length <= 2) return;
+    // A card backed by a saved row has to be deleted, not just dropped from
+    // the screen. Update used to write only the legs still showing, so the
+    // removed row stayed in the group and the leg reappeared the next time the
+    // strategy was opened -- and went on counting towards its booked PnL.
+    const savedId = editIds[idx];
+    if (savedId) setRemovedIds((prev) => (prev.includes(savedId) ? prev : [...prev, savedId]));
     setLegs((prev)    => prev.filter((_, i) => i !== idx));
     setEditIds((prev) => prev.filter((_, i) => i !== idx));
   }
@@ -1327,7 +1338,21 @@ function SimulatorInner() {
         if (j.error) throw new Error(j.error);
         if (!id && !j.id) throw new Error("Save failed");
       }
-      setSaveMsg("All strategies updated. Redirecting…");
+      // Deleted last, and only once every surviving leg has been written: if
+      // the update fails part-way the group is still whole, and the removals
+      // can be retried by pressing Update again.
+      for (const id of removedIds) {
+        const res = await fetch(`/api/options/trades/${id}`, { method: "DELETE" });
+        // Already gone is the outcome that was wanted, so it is not an error.
+        if (!res.ok && res.status !== 404) {
+          throw new Error((await res.json().catch(() => ({}))).error || `Could not delete leg ${id}`);
+        }
+      }
+      const removedCount = removedIds.length;
+      setRemovedIds([]);
+      setSaveMsg(removedCount
+        ? `All strategies updated. ${removedCount} removed leg${removedCount > 1 ? "s" : ""} deleted. Redirecting…`
+        : "All strategies updated. Redirecting…");
       setTimeout(() => router.push("/options"), 1500);
     } catch (err) { setSaveErr(err.message); }
     finally { setSaving(false); }
@@ -1731,6 +1756,18 @@ function SimulatorInner() {
                 <h3 className="text-sm font-bold text-slate-800">Edit Combined Strategy</h3>
                 <p className="text-xs text-slate-400 mt-0.5">Update all legs, or save as a brand-new combined group.</p>
               </div>
+              {/* Removing a card does not touch the database until Update is
+                  pressed, so the deletion is stated before it happens. */}
+              {removedIds.length > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                  <span className="font-semibold">
+                    {removedIds.length} leg{removedIds.length > 1 ? "s" : ""} removed.
+                  </span>{" "}
+                  Update Strategy deletes {removedIds.length > 1 ? "them" : "it"} permanently.
+                  Add as New Strategy leaves the original group as it is, and leaving this
+                  page without saving keeps every leg.
+                </div>
+              )}
               <div className="flex flex-wrap gap-3">
                 <button onClick={updateStrategies} disabled={saving}
                   className="flex items-center gap-2 rounded-lg bg-violet-600 px-6 py-3 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-60 transition-colors whitespace-nowrap">
