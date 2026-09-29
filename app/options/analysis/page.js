@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import StrategySelect from "../../../components/StrategySelect";
 import useDataVersion from "../../../lib/useDataVersion";
+import { strategyWindows, overlappingWindows, sharedBotDays } from "../../../lib/strategy-overlap";
 
 /* ── Formatters ─────────────────────────────────────────── */
 function pad(n) { return String(n).padStart(2, "0"); }
@@ -648,6 +649,23 @@ export default function OptionsAnalysis() {
   const hasFilters  = filterToken !== "all" || filterStatus !== "all" || filterDateFrom || filterDateTo || selectedAccount;
 
   // Per-day map (date string → day row)
+  // Days this strategy's bot window shares with another strategy on the same
+  // coin and account -- see lib/strategy-overlap.js for why this is flagged.
+  //
+  // Built from allTrades, not the filtered list: a neighbour hidden by the
+  // page's own filters still shares the day.
+  const overlaps = useMemo(() => {
+    if (!trade || !dateFrom || !dateTo) return [];
+    const today = toLocalDateStr(new Date());
+    const windows = strategyWindows(allTrades, { canon: canonToken, toDate: toLocalDateStr, today });
+    return overlappingWindows({
+      selfKey:   selectedUnit?.group_id ? `g:${selectedUnit.group_id}` : `s:${trade.id}`,
+      token:     canonToken(trade.token),
+      accountId: trade.account_id,
+      from: dateFrom, to: dateTo, windows,
+    });
+  }, [trade, dateFrom, dateTo, allTrades, selectedUnit]);
+
   const dayMap = useMemo(() => {
     const m = new Map();
     (botData?.dayBreakdown || []).forEach((d) => {
@@ -656,6 +674,14 @@ export default function OptionsAnalysis() {
     });
     return m;
   }, [botData]);
+
+  // Which of the shared days the bot actually traded, and what they are worth.
+  const sharedDays = useMemo(() => sharedBotDays(
+    overlaps,
+    [...dayMap].map(([date, day]) => [date, Number(day?.net_pnl || 0)]),
+  ), [overlaps, dayMap]);
+
+  const sharedTotal = sharedDays.reduce((a, [, v]) => a + v, 0);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -874,6 +900,24 @@ export default function OptionsAnalysis() {
                   <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-4">
                     Bot Metrics — {baseToken(String(trade.token || "").split("_").join("-"))} on {selectedAccount} · {fmt(dateFrom)} → {fmt(dateTo)}
                   </p>
+                  {/* Shared days are stated rather than left to be discovered by
+                      adding the per-strategy figures up and finding they exceed
+                      the token total. */}
+                  {sharedDays.length > 0 && (
+                    <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                      <span className="font-semibold">
+                        {sharedDays.length === 1 ? "1 bot day is shared" : `${sharedDays.length} bot days are shared`}
+                        {" "}with {overlaps.length === 1 ? "another" : `${overlaps.length} other`} {baseToken(String(trade.token || "").split("_").join("-"))} strateg{overlaps.length === 1 ? "y" : "ies"}.
+                      </span>{" "}
+                      {sharedDays.map(([d, v], i) => (
+                        <span key={d}>{i > 0 ? ", " : ""}{fmt(d)} ({fmtCcy(v)})</span>
+                      ))}
+                      {sharedDays.length > 1 && <> — {fmtCcy(sharedTotal)} in total</>}.
+                      {" "}These figures count {sharedDays.length === 1 ? "that day" : "those days"} in full, which is right for this
+                      strategy. Adding this strategy&apos;s bot PNL to its neighbour&apos;s would count
+                      {" "}{sharedDays.length === 1 ? "it" : "them"} twice — the Cumulative Report counts each day once.
+                    </div>
+                  )}
                   <div className="grid grid-cols-4 sm:grid-cols-7 gap-3">
                     <BotBox label="RTPS"          sub="Per-RTP"    value={fmtNum(botData.summary.rtps)} />
                     <BotBox label="Per Hour RTPS" sub="Avg/Hr"     value={fmtNum(botData.summary.per_hour_rtps)} />
