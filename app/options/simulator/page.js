@@ -1657,6 +1657,10 @@ function SimulatorInner() {
                   form={leg.form}
                   set={(k, v, opts) => setLegField(idx, k, v, opts)}
                   setBulk={(updates) => setLegBulk(idx, updates)}
+                  // Bound to the FIRST card, whichever card calls it: the
+                  // futures price is one price for the whole structure, so it
+                  // is written where the other legs follow it from.
+                  setSharedField={(key, value) => setLegField(masterLegIdx, key, value)}
                   isSyncMaster={idx === masterLegIdx}
                   syncOverrides={leg.overrides || {}}
                   onRelinkField={(k) => relinkLegField(idx, k)}
@@ -1865,7 +1869,7 @@ export default function CombinedSimulator() {
 
 /* ── Leg Card ─────────────────────────────────────────── */
 
-const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, form, set, setBulk, derived, canRemove, onRemove, accountId, isSyncMaster = false, syncOverrides = {}, onRelinkField, compact = false, masterForm = null, syncedKeys = [] }, ref) {
+const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, form, set, setBulk, setSharedField, derived, canRemove, onRemove, accountId, isSyncMaster = false, syncOverrides = {}, onRelinkField, compact = false, masterForm = null, syncedKeys = [] }, ref) {
   const inp   = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
   const style = LEG_STYLES[legType];
 
@@ -2001,10 +2005,13 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
             .then(r => r.json())
             .then(d => {
               if (d.mark_price) {
-                const upd = { fut_mid_price: String(d.mid_price ?? d.mark_price) };
-                // Only overwrite the displayed fut_entry_price when NOT preserving
-                if (!preserveRef.current) upd.fut_entry_price = String(d.mark_price);
-                setBulk(upd);
+                // fut_mid_price is this leg's own execution helper. The entry
+                // price is not: see refreshTicker below for why it is written
+                // through the first card.
+                setBulk({ fut_mid_price: String(d.mid_price ?? d.mark_price) });
+                if (!preserveRef.current && isSyncMaster) {
+                  setSharedField?.("fut_entry_price", String(d.mark_price));
+                }
               }
             })
             .catch(() => {});
@@ -2082,9 +2089,17 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
         setTickerError(optData?.error || "No live quote returned for this option.");
       }
       if (futRes.ok && Number(futData?.mark_price) > 0) {
-        update.fut_entry_price = futData.exact_price
+        // One futures price for the whole structure, written on the first card
+        // and followed by the rest. Written per leg it drifted: each card
+        // fetched at its own moment, so refreshing leg 3 left it holding a
+        // futures price a few cents off leg 1's -- which the compact card then
+        // had to reveal, opening a Fut Entry Price field on a card that is
+        // meant to show five. A leg whose futures price was typed by hand is
+        // already marked as its own and still keeps it.
+        const futPrice = futData.exact_price
           ? String(futData.mark_price)
           : String(Math.round(futData.mark_price * 100) / 100);
+        if (isSyncMaster) setSharedField?.("fut_entry_price", futPrice);
         update.fut_mid_price   = String(futData.mid_price ?? futData.mark_price ?? "");
         setFutInfo(futData.feed ? { feed: futData.feed, delayed: futData.delayed_minutes } : null);
       } else {
