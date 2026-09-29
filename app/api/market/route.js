@@ -189,7 +189,7 @@ export async function GET(request) {
         const u = await alpacaUnderlying(token, apiKey, apiSecret).catch(() => null);
         if (!u || !(u.mid > 0)) {
           return NextResponse.json(
-            { error: `No two-sided quote for ${token} right now, so there is no mid price.` },
+            { error: `No two-sided quote for ${token} on either feed, so there is no mid price.` },
             { status: 200 }
           );
         }
@@ -200,6 +200,11 @@ export async function GET(request) {
           best_bid:    u.bid,
           best_ask:    u.ask,
           mid_price:   u.mid,
+          // Which feed answered, and how old its quote is. A delayed_sip price
+          // is 15 minutes behind and must not be shown as a live one.
+          feed:            u.feed,
+          quote_at:        u.quote_at,
+          delayed_minutes: u.delayed_minutes,
           // Tells the pages to fill this as-is rather than round it to cents.
           exact_price: true,
         });

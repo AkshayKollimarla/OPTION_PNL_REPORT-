@@ -1935,6 +1935,9 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
   const [fetchingTicker, setFetchingTicker] = useState(false);
   // Why the last refresh returned no price, shown beside the button.
   const [tickerError,    setTickerError]    = useState(null);
+  // Which feed the underlying price came from, and how far behind it is. A
+  // delayed price is usable but must say so.
+  const [futInfo,        setFutInfo]        = useState(null);
   const chainTimerRef = useRef(null);
   // When true, saved DB values are preserved — auto-populating from live data won't overwrite them.
   // Set when form is loaded from DB (token changes from empty → value with saved data).
@@ -2083,6 +2086,13 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
           ? String(futData.mark_price)
           : String(Math.round(futData.mark_price * 100) / 100);
         update.fut_mid_price   = String(futData.mid_price ?? futData.mark_price ?? "");
+        setFutInfo(futData.feed ? { feed: futData.feed, delayed: futData.delayed_minutes } : null);
+      } else {
+        // The futures leg used to fail in silence: no price, no message, and a
+        // futures field that simply never moved however often Refresh was
+        // pressed. Whatever the venue says is now shown.
+        setFutInfo(null);
+        if (futData?.error) setTickerError((prev) => prev || futData.error);
       }
       if (Object.keys(update).length) setBulk(update);
     } finally { setFetchingTicker(false); }
@@ -2283,6 +2293,12 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
             )}
             {tickerError && !fetchingTicker && (
               <span className="text-xs font-medium text-amber-700">{tickerError}</span>
+            )}
+            {futInfo?.feed === "delayed_sip" && !fetchingTicker && (
+              <span className="text-xs text-slate-400">
+                underlying from the delayed feed
+                {futInfo.delayed != null ? `, ${futInfo.delayed} min behind` : ""}
+              </span>
             )}
           </div>
         )}
