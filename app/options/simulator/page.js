@@ -6,6 +6,7 @@ import { computeDerived, strikeNumber } from "../../../lib/options-calculations"
 import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
 import TokenSelect from "../../../components/TokenSelect";
 import { chainReloadAction, usMarketToday } from "../../../lib/chain-reload";
+import { DISTANCE_KEYS, distanceDecision } from "../../../lib/leg-distance";
 
 const RISK_FREE = 0.05;
 
@@ -340,6 +341,11 @@ function SimulatorInner() {
         setLegs(orderedLegs);
         setEditIds(ids);
         setRemovedIds([]);
+        // Judge this group's saved distances afresh -- opening a second
+        // strategy without leaving the page must not inherit the first one's
+        // verdict.
+        distanceManualRef.current = { upside_distance: false, down_distance: false };
+        distanceSeenRef.current   = { upside_distance: false, down_distance: false };
         // Restore the account this group was actually saved with.
         const savedAcctId = members[0]?.account_id;
         if (savedAcctId) setSelectedAcct(String(savedAcctId));
@@ -440,6 +446,12 @@ function SimulatorInner() {
   const STRIKE_INVALIDATING = ["expiry", "token"];
   const masterLegIdx = legDisplayOrder[0];
 
+  // Distances follow the short strikes -- see lib/leg-distance.js for the rule
+  // and why. These two carry the verdicts across renders: which field a person
+  // has taken over, and which has already been judged once on open.
+  const distanceManualRef = useRef({ upside_distance: false, down_distance: false });
+  const distanceSeenRef   = useRef({ upside_distance: false, down_distance: false });
+
   // Quantity propagates by MAGNITUDE, with each leg supplying its own sign:
   // this app encodes direction in the sign of opt_entry_qty (short = negative,
   // as applyLegType already enforces on a type change). Copying the raw value
@@ -456,6 +468,13 @@ function SimulatorInner() {
 
   function setLegField(idx, key, value, opts = {}) {
     const synced = SYNCED_KEYS.includes(key);
+    // opts.auto marks the write that came from the strikes themselves. Anything
+    // else is a person typing, which takes the field over -- or, when they
+    // empty it, hands it back.
+    if (DISTANCE_KEYS.includes(key) && !opts.auto) {
+      distanceManualRef.current[key] = String(value ?? "").trim() !== "";
+      distanceSeenRef.current[key] = true;
+    }
     // Only the FIRST card sizes other legs, and only while they are still
     // following it. A quantity typed on any other card is that card's own and
     // moves nothing else: the legs start equal because the first card seeded
@@ -495,6 +514,38 @@ function SimulatorInner() {
       });
     });
   }
+
+  // Upside distance is how far the call is sold above the futures price, down
+  // distance how far the put is sold below it: at futures 2700, a call short at
+  // 2850 is 150 up and a put short at 2550 is 150 down. Rounded to one decimal,
+  // which is as fine as these are read.
+  //
+  // Written onto the first card, so the other legs pick it up through the same
+  // path as any other shared field. Re-running after that write is harmless:
+  // the field then already holds the computed value and nothing is written, so
+  // this settles in one pass rather than looping.
+  useEffect(() => {
+    const master = legs[masterLegIdx];
+    if (!master) return;
+    const strikeOf = (side) => legs.find((l) => l.type === `${side} SHORT`)?.form?.options_strike ?? null;
+
+    const { writes, manual, seen } = distanceDecision({
+      futEntryPrice:   master.form.fut_entry_price,
+      callShortStrike: strikeOf("CALL"),
+      putShortStrike:  strikeOf("PUT"),
+      shown:  master.form,
+      manual: distanceManualRef.current,
+      seen:   distanceSeenRef.current,
+    });
+    distanceManualRef.current = manual;
+    distanceSeenRef.current   = seen;
+    // Written onto the first card, so the other legs pick it up through the
+    // same path as any other shared field.
+    for (const [key, value] of Object.entries(writes)) {
+      setLegField(masterLegIdx, key, value, { auto: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [legs, masterLegIdx]);
 
   // Re-link a leg to the first card's value after it was overridden.
   function relinkLegField(idx, key) {
