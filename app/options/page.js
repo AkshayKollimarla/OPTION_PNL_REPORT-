@@ -170,7 +170,9 @@ export default function OptionsDashboard() {
   // from the entry log — so the column only ever held what older rows happened
   // to record. The values stay in the database; they are simply not a column
   // of the options book any more.
-  const COL_COUNT = 15;
+  // Kept in step with the header above: it spans the combined-strategy banner
+  // across the whole table.
+  const COL_COUNT = 17;
 
   function clearFilters() {
     setSearch(""); setDateFrom(""); setDateTo(""); setFilter("all");
@@ -298,7 +300,9 @@ export default function OptionsDashboard() {
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50 text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                  {["#","Date","Token","Account","Type","Strike","Entry Price","Opt Qty","Fut Qty","Distance","Expiry","Days","Status","Booked PnL","Actions"].map((h) => (
+                  {/* Booked PnL is the sum of the two beside it, so the parts are read
+                      before the total. */}
+                  {["#","Date","Token","Account","Type","Strike","Entry Price","Opt Qty","Fut Qty","Distance","Expiry","Days","Status","Futures PnL","Options PnL","Booked PnL","Actions"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -481,6 +485,12 @@ function TradeRow({ t, combined, groupId, acctMap, confirmId, deletingId, onConf
         <span className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${STATUS_COLORS[t.status] || "bg-slate-100 text-slate-600"}`}>
           {t.status}
         </span>
+      </td>
+      <td className={`px-4 py-3 whitespace-nowrap ${Number(t.fut_pnl) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+        {t.fut_pnl != null && t.fut_pnl !== "" ? fmtCcy(t.fut_pnl) : "—"}
+      </td>
+      <td className={`px-4 py-3 whitespace-nowrap ${Number(t.opt_pnl) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+        {t.opt_pnl != null && t.opt_pnl !== "" ? fmtCcy(t.opt_pnl) : "—"}
       </td>
       <td className={`px-4 py-3 font-semibold ${Number(t.net_booked_pnl) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
         {t.net_booked_pnl != null ? fmtCcy(t.net_booked_pnl) : "—"}
