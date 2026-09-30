@@ -7,6 +7,7 @@ import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
 import TokenSelect from "../../../components/TokenSelect";
 import { chainReloadAction, usMarketToday } from "../../../lib/chain-reload";
 import { DISTANCE_KEYS, distanceDecision } from "../../../lib/leg-distance";
+import { spreadPrices } from "../../../lib/spread-price";
 
 const RISK_FREE = 0.05;
 
@@ -546,6 +547,10 @@ function SimulatorInner() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [legs, masterLegIdx]);
+
+  // What each side of the structure cost to open -- long premium less short
+  // premium. See lib/spread-price.js.
+  const spreads = useMemo(() => spreadPrices(legs), [legs]);
 
   // Re-link a leg to the first card's value after it was overridden.
   function relinkLegField(idx, key) {
@@ -1716,6 +1721,28 @@ function SimulatorInner() {
             <SummaryCard label="Per Day Theta"    value={fmtCcy(combinedPerDayTheta)} color={combinedPerDayTheta >= 0 ? "green" : "red"} />
           </div>
 
+          {/* What each side cost to put on. Reading it off the cards meant
+              subtracting two numbers sitting in different columns. */}
+          {(spreads.call || spreads.put) && (
+            <div className="mb-6 flex flex-wrap gap-3">
+              {[spreads.call, spreads.put].filter(Boolean).map((sp) => (
+                <div key={sp.side}
+                  className={`rounded-lg border px-4 py-2.5 ${sp.side === "CALL" ? "border-emerald-100 bg-emerald-50/60" : "border-sky-100 bg-sky-50/60"}`}>
+                  <p className={`text-[11px] font-semibold uppercase tracking-wide ${sp.side === "CALL" ? "text-emerald-700" : "text-sky-700"}`}>
+                    {sp.side === "CALL" ? "Call" : "Put"} Spread
+                  </p>
+                  <p className="text-lg font-bold text-slate-800 leading-tight">
+                    {fmtOpt(Math.abs(sp.net))}
+                    <span className="ml-1.5 text-[11px] font-semibold uppercase text-slate-400">{sp.kind}</span>
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    long {fmtOpt(sp.long)} − short {fmtOpt(sp.short)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Scenario clock. Only the Black-Scholes rows move with it — the
               "Net ... Pnl Expiry" figures above are expiry payoffs and have no time
               value to decay, so they are unaffected by design. */}
@@ -2565,6 +2592,15 @@ function BsStrip({ form, legType, derived }) {
 }
 
 /* ── Formatters ──────────────────────────────────────── */
+
+// Option premiums are quoted finer than dollars and cents: an exact mid of a
+// 4.75/4.76 market is 4.755, and rounding it to 4.76 would leave the spread
+// arithmetic on screen not adding up. Two decimals minimum so 1.8 reads 1.80.
+function fmtOpt(v) {
+  const num = Number(v);
+  if (v === null || v === undefined || isNaN(num)) return "—";
+  return `$${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+}
 
 function fmtCcy(v) {
   const num = Number(v);
