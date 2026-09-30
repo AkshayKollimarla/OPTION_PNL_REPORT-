@@ -70,6 +70,8 @@ export async function GET(request) {
   const dateTo  = searchParams.get("date_to")   || "";
   const account = (searchParams.get("account") || "").trim();
   const exchange = (searchParams.get("exchange") || "").trim();
+  const sort    = (searchParams.get("sort")     || "").trim();
+  const dir     = (searchParams.get("dir")      || "").trim().toLowerCase() === "asc" ? "ASC" : "DESC";
   // Comma-separated base tokens. The caller supplies them because the mapping
   // from token to exchange lives in the OTHER database (bot_entries), and this
   // endpoint should not reach across a database boundary to answer a filter.
@@ -142,7 +144,27 @@ export async function GET(request) {
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
-  const ORDER = `ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END,
+  // Sortable columns, named here rather than interpolated from the query, so
+  // the sort key can never carry SQL of its own.
+  const SORTABLE = { fut_pnl: "fut_pnl", opt_pnl: "opt_pnl", net_booked_pnl: "net_booked_pnl" };
+  const sortCol = SORTABLE[sort] || null;
+
+  // One strategy is one row of the table, and a combined strategy is several
+  // database rows sharing a group_id. Sorting the rows by their own PnL would
+  // rank legs, scattering a four-leg structure across the page and, once
+  // pagination cuts in, across pages -- half a strategy at the bottom of one
+  // page and half at the top of the next.
+  //
+  // So the sort key is the STRATEGY's total: a window sum over the group,
+  // which every leg of that group carries. The legs then sort together by
+  // that one figure, and the tie-breakers keep them adjacent and in their
+  // saved order.
+  const GROUP_KEY = "COALESCE(group_id, CONCAT('#', id))";
+  const ORDER = sortCol
+    ? `ORDER BY SUM(COALESCE(${sortCol}, 0)) OVER (PARTITION BY ${GROUP_KEY}) ${dir},
+                ${GROUP_KEY},
+                COALESCE(leg_index, 0), id`
+    : `ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END,
                  entry_date DESC, id DESC`;
 
   await ensureColumns();

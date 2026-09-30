@@ -5,6 +5,14 @@ import Link from "next/link";
 
 const PAGE_SIZE = 50;
 
+// The headers that rank the table, and the column each one ranks by. A
+// combined strategy is ranked on the total of its legs, not leg by leg — the
+// api does that part.
+const SORT_KEYS = {
+  "Futures PnL": "fut_pnl",
+  "Options PnL": "opt_pnl",
+};
+
 const STATUS_COLORS = {
   open:   "bg-emerald-100 text-emerald-700",
   closed: "bg-slate-100 text-slate-600",
@@ -30,10 +38,15 @@ export default function OptionsDashboard() {
   const [total,      setTotal]      = useState(0);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState(null);
+  // Which column the table is ranked by, and which way. Empty means the
+  // default order -- open strategies first, newest first -- which is what a
+  // third click returns to.
+  const [sortKey,    setSortKey]    = useState("");
+  const [sortDir,    setSortDir]    = useState("desc");
   const [confirmId,  setConfirmId]  = useState(null);
   const [deletingId, setDeletingId] = useState(null);
 
-  const load = useCallback((status, tokenQ, from, to, pg, acct, bases, ex) => {
+  const load = useCallback((status, tokenQ, from, to, pg, acct, bases, ex, sk, sd) => {
     setLoading(true);
     const qs = new URLSearchParams();
     if (status !== "all") qs.set("status", status);
@@ -46,6 +59,10 @@ export default function OptionsDashboard() {
     // narrowing the 50 rows already fetched would hide matches on other pages
     // and quietly understate the totals.
     if (bases && bases.length) qs.set("bases", bases.join(","));
+    // Sorted in the database, not here: this page holds 50 of several hundred
+    // rows, so ranking what has already been fetched would answer "the best of
+    // this page" while looking like "the best overall".
+    if (sk) { qs.set("sort", sk); qs.set("dir", sd || "desc"); }
     qs.set("page",  pg);
     qs.set("limit", PAGE_SIZE);
 
@@ -110,14 +127,23 @@ export default function OptionsDashboard() {
   // Reset to page 1 whenever filters change
   useEffect(() => {
     setPage(1);
-    load(filter, search, dateFrom, dateTo, 1, account, exchangeBases, exchange);
-  }, [filter, search, dateFrom, dateTo, account, exchangeBases, exchange, load]);
+    load(filter, search, dateFrom, dateTo, 1, account, exchangeBases, exchange, sortKey, sortDir);
+  }, [filter, search, dateFrom, dateTo, account, exchangeBases, exchange, sortKey, sortDir, load]);
 
   // Load new page without resetting
   useEffect(() => {
-    load(filter, search, dateFrom, dateTo, page, account, exchangeBases, exchange);
+    load(filter, search, dateFrom, dateTo, page, account, exchangeBases, exchange, sortKey, sortDir);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
+
+  // Biggest first on the first click, since the question is normally "which
+  // made the most"; then smallest first, which is the same question about
+  // losses; then back to the default order.
+  const toggleSort = (key) => {
+    if (sortKey !== key)      { setSortKey(key); setSortDir("desc"); }
+    else if (sortDir === "desc") setSortDir("asc");
+    else                      { setSortKey(""); setSortDir("desc"); }
+  };
 
   async function handleDelete(id) {
     setDeletingId(id); setConfirmId(null);
@@ -301,10 +327,28 @@ export default function OptionsDashboard() {
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50 text-xs font-semibold text-slate-500 uppercase tracking-wide">
                   {/* Booked PnL is the sum of the two beside it, so the parts are read
-                      before the total. */}
-                  {["#","Date","Token","Account","Type","Strike","Entry Price","Opt Qty","Fut Qty","Distance","Expiry","Days","Status","Futures PnL","Options PnL","Booked PnL","Actions"].map((h) => (
-                    <th key={h} className="px-4 py-3 text-left whitespace-nowrap">{h}</th>
-                  ))}
+                      before the total. The two parts rank the whole book when
+                      clicked; SORT_KEYS says which header does that. */}
+                  {["#","Date","Token","Account","Type","Strike","Entry Price","Opt Qty","Fut Qty","Distance","Expiry","Days","Status","Futures PnL","Options PnL","Booked PnL","Actions"].map((h) => {
+                    const key = SORT_KEYS[h];
+                    if (!key) return <th key={h} className="px-4 py-3 text-left whitespace-nowrap">{h}</th>;
+                    const active = sortKey === key;
+                    return (
+                      <th key={h} className="px-4 py-3 text-left whitespace-nowrap">
+                        <button
+                          onClick={() => toggleSort(key)}
+                          title={active
+                            ? (sortDir === "desc" ? "Sorted biggest first — click for smallest first" : "Sorted smallest first — click to clear")
+                            : `Rank every strategy by ${h.toLowerCase()}`}
+                          className={`inline-flex items-center gap-1 uppercase tracking-wide transition-colors ${active ? "text-violet-700" : "hover:text-slate-700"}`}>
+                          {h}
+                          <span className={active ? "text-violet-700" : "text-slate-300"}>
+                            {active ? (sortDir === "desc" ? "↓" : "↑") : "↕"}
+                          </span>
+                        </button>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
