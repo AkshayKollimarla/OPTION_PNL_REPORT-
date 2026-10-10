@@ -109,8 +109,19 @@ function AnalysisInner() {
 
         {fetched && Number(s.total_entries) > 0 && (
           <>
-            {/* Summary stat strip */}
+            {/* Summary stat strip. Max, min and average compare days against
+                each other; with a single day they are the same number three
+                times over, so that case gets the day's own figures instead. */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+              {Number(s.total_entries) === 1 ? (
+                <>
+                  <StatCard label="RTPS"      value={s.total_rtps}    fmt="number"   color="slate" />
+                  <StatCard label="RTP-PNL"   value={s.total_rtp_pnl} fmt="currency" color="blue"  />
+                  <StatCard label="Net-PNL"   value={s.total_net_pnl} fmt="currency" color="green" />
+                  <StatCard label="Volume"    value={s.total_volume}  fmt="currency" color="blue"  />
+                  <StatCard label="APY"       value={s.avg_apy}       fmt="percent"  color="purple" />
+                </>
+              ) : (<>
               <StatCard label="Total Entries"   value={s.total_entries}  fmt="number" color="slate" />
               <StatCard label="Max RTPS"        value={s.max_rtps}       fmt="number" color="green" />
               <StatCard label="Min RTPS"        value={s.min_rtps}       fmt="number" color="red"   />
@@ -125,15 +136,31 @@ function AnalysisInner() {
               <StatCard label="Best Net-PNL"    value={s.max_net_pnl}    fmt="currency" color="green" />
               <StatCard label="Worst Net-PNL"   value={s.min_net_pnl}    fmt="currency" color="red"   />
               <StatCard label="Total RTP-PNL"   value={s.total_rtp_pnl}  fmt="currency" color="blue"  />
+              </>)}
             </div>
 
-            {/* Performer cards */}
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-              <EntryCard title="Best Performer" subtitle="Highest RTPS"  badge="green"  entry={data.bestRtps}  highlight="rtps" />
-              <EntryCard title="Least Performer" subtitle="Lowest RTPS"  badge="red"    entry={data.worstRtps} highlight="rtps" />
-              <EntryCard title="Best Net-PNL"    subtitle="Highest Net-PNL" badge="green" entry={data.bestPnl}   highlight="net_pnl" />
-              <EntryCard title="Worst Net-PNL"   subtitle="Lowest Net-PNL"  badge="red"   entry={data.worstPnl}  highlight="net_pnl" />
-            </div>
+            {/* One entry is not a comparison. Best, least, best net and worst
+                net are all the same row then, and the page answered "which day
+                was best" five times over instead of "what was this bot set to".
+                Coming in from a coin on the Summary Report lands here, so that
+                is the case worth showing properly. */}
+            {Number(s.total_entries) === 1 ? (
+              <EntryCard
+                title={`Bot Parameters${
+                  data.bestRtps?.entry_datetime ? ` — ${fmtDay(data.bestRtps.entry_datetime)}` : ""}`}
+                subtitle="As run that day"
+                badge="blue"
+                entry={data.bestRtps}
+              />
+            ) : (
+              /* Performer cards */
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                <EntryCard title="Best Performer" subtitle="Highest RTPS"  badge="green"  entry={data.bestRtps}  highlight="rtps" />
+                <EntryCard title="Least Performer" subtitle="Lowest RTPS"  badge="red"    entry={data.worstRtps} highlight="rtps" />
+                <EntryCard title="Best Net-PNL"    subtitle="Highest Net-PNL" badge="green" entry={data.bestPnl}   highlight="net_pnl" />
+                <EntryCard title="Worst Net-PNL"   subtitle="Lowest Net-PNL"  badge="red"   entry={data.worstPnl}  highlight="net_pnl" />
+              </div>
+            )}
           </>
         )}
 
@@ -148,6 +175,14 @@ function AnalysisInner() {
 }
 
 /* ── Sub-components ─────────────────────────────────────── */
+
+// The entry's own day, read in the local calendar rather than UTC: an entry
+// stamped late in the day would otherwise be reported as the next one.
+function fmtDay(value) {
+  const d = new Date(value);
+  if (isNaN(d)) return "";
+  return d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+}
 
 const STAT_COLORS = {
   green:  "text-emerald-600 bg-emerald-50",
