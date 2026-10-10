@@ -163,6 +163,26 @@ function botSymbolPrefix(sym) {
   return sym === "SOL_USDC" ? "SOL-USDC" : sym;
 }
 
+// A leg's direction, which the book keeps only in the sign of its quantity:
+// 400 is bought, -400 is sold. The option type alone cannot say it, so a four
+// leg structure read as PUT, PUT, CALL, CALL and the two spreads in it were
+// indistinguishable from four legs the same way round.
+//
+// Returns the type alone when the quantity says nothing -- an unfilled leg is
+// not yet long or short, and guessing would be worse than leaving it open.
+function legDirection(leg) {
+  const qty = Number(leg?.opt_entry_qty);
+  if (!Number.isFinite(qty) || qty === 0) return null;
+  return qty < 0 ? "SHORT" : "LONG";
+}
+
+function legTypeLabel(leg) {
+  const type = String(leg?.option_type || "").toUpperCase();
+  if (!type) return "—";
+  const dir = legDirection(leg);
+  return dir ? `${type} ${dir}` : type;
+}
+
 /* ── Options input fields to display ───────────────────── */
 
 const OPT_FIELDS = [
@@ -1098,7 +1118,7 @@ export default function OptionsAnalysis() {
                                 <th className="py-2 pr-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide">Field</th>
                                 {unitLegs.map((l) => (
                                   <th key={l.id} className="py-2 px-2 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">
-                                    {l.option_type} {l.options_strike}
+                                    {legTypeLabel(l)} {l.options_strike}
                                   </th>
                                 ))}
                               </tr>
@@ -1110,7 +1130,11 @@ export default function OptionsAnalysis() {
                                   {unitLegs.map((l) => {
                                     const raw = l[key];
                                     let val;
-                                    if (f === "date") val = fmt(raw);
+                                    // Direction belongs beside the type, not
+                                    // left to be read off the sign of a
+                                    // quantity further down the column.
+                                    if (key === "option_type") val = legTypeLabel(l);
+                                    else if (f === "date") val = fmt(raw);
                                     else if (f === "currency") val = fmtCcy(raw);
                                     else if (f === "number") val = fmtNum(raw, 4);
                                     else val = raw != null && raw !== "" ? String(raw) : "—";
@@ -1131,7 +1155,8 @@ export default function OptionsAnalysis() {
                         OPT_FIELDS.map(({ key, label, fmt: f }) => {
                           const raw = trade[key];
                           let val;
-                          if (f === "date") val = fmt(raw);
+                          if (key === "option_type") val = legTypeLabel(trade);
+                          else if (f === "date") val = fmt(raw);
                           else if (f === "currency") val = fmtCcy(raw);
                           else if (f === "number") val = fmtNum(raw, 4);
                           else val = raw != null && raw !== "" ? String(raw) : "—";
