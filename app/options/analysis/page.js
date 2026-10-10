@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback, Fragment } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef, Fragment } from "react";
 import Link from "next/link";
 import StrategySelect from "../../../components/StrategySelect";
 import useDataVersion from "../../../lib/useDataVersion";
@@ -248,6 +248,15 @@ export default function OptionsAnalysis() {
   // Which coin's strategies are unfolded under it. One at a time: the point is
   // to read one coin's book, and several open at once buries the table.
   const [openToken,  setOpenToken]  = useState(null);
+  // Where a jump into Strategy Analysis came from, so Back returns to it:
+  // the tab, the coin that was unfolded, and how far down the page it was.
+  // Null when the tab was reached any other way, which is why there is no
+  // Back control sitting there by default.
+  const [returnTo,   setReturnTo]   = useState(null);
+  // The same value in a ref, so the popstate listener reads it without being
+  // torn down and resubscribed, and so restoring it never has to read state
+  // from inside a state updater.
+  const returnRef = useRef(null);
   const [loadingCum, setLoadingCum] = useState(false);
   // The filters the report on screen was actually run with — distinct from
   // the inputs above, which can be edited without pressing Load. Keeping them
@@ -662,6 +671,14 @@ export default function OptionsAnalysis() {
   // The id is the one its own list would use: the first leg of the group in
   // allTrades order, not whichever leg this report happened to read first.
   const openStrategy = useCallback((gid, legId) => {
+    // The tabs are state, not routes, so the browser would otherwise take
+    // Back to whatever came before this page entirely. A history entry at the
+    // same url turns Back into "undo this jump": popping it fires popstate
+    // without a reload, which is caught below.
+    const here = { openToken, scrollY: typeof window !== "undefined" ? window.scrollY : 0 };
+    returnRef.current = here;
+    setReturnTo(here);
+    if (typeof window !== "undefined") window.history.pushState({ gridbotJump: true }, "");
     setFilterToken("all");
     setFilterStatus("all");
     setFilterDateFrom("");
@@ -672,7 +689,32 @@ export default function OptionsAnalysis() {
     setSelectedId(String(first?.id ?? legId));
     setActiveTab("analysis");
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [allTrades]);
+  }, [allTrades, openToken]);
+
+  // Back to the report, with the coin still unfolded and the page where it
+  // was. Two frames, not one: the cumulative tab has to be rendered before
+  // there is anything that tall to scroll down.
+  const backToReport = useCallback(() => {
+    const prev = returnRef.current;
+    if (!prev) return;
+    returnRef.current = null;
+    setReturnTo(null);
+    setActiveTab("cumulative");
+    setOpenToken(prev.openToken);
+    if (typeof window !== "undefined") {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        window.scrollTo({ top: prev.scrollY, behavior: "auto" });
+      }));
+    }
+  }, []);
+
+  // The browser's Back button, and the mouse button that does the same.
+  useEffect(() => {
+    if (!returnTo) return undefined;
+    const onPop = () => backToReport();
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [returnTo, backToReport]);
 
   // Days this strategy's bot window shares with another strategy on the same
   // coin and account -- see lib/strategy-overlap.js for why this is flagged.
@@ -732,6 +774,16 @@ export default function OptionsAnalysis() {
 
         {/* ── Strategy Analysis Tab ─────────────────────────── */}
         {activeTab === "analysis" && (<>
+
+        {/* Only after a jump from the report: nothing to go back to
+            otherwise. The browser's Back does the same thing. */}
+        {returnTo && (
+          <button
+            onClick={() => { if (typeof window !== "undefined") window.history.back(); else backToReport(); }}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-colors">
+            &larr; Back to Cumulative Report
+          </button>
+        )}
 
         {/* ── Strategy Selector ─────────────────────────────── */}
         <div className="rounded-xl border border-slate-100 bg-white p-5 shadow-card space-y-4">
