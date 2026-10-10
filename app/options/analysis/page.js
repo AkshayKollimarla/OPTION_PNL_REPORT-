@@ -5,6 +5,7 @@ import Link from "next/link";
 import StrategySelect from "../../../components/StrategySelect";
 import useDataVersion from "../../../lib/useDataVersion";
 import { strategyWindows, overlappingWindows, sharedBotDays } from "../../../lib/strategy-overlap";
+import { botAccountFor } from "../../../lib/bot-account";
 
 /* ── Formatters ─────────────────────────────────────────── */
 function pad(n) { return String(n).padStart(2, "0"); }
@@ -536,10 +537,7 @@ export default function OptionsAnalysis() {
   }, [filteredTrades, selectedId]);
 
   useEffect(() => {
-    // selectedAccount is deliberately NOT cleared here. It is the user's
-    // choice of which bot to compare against, not a property of the strategy,
-    // so it survives switching strategies and has to be re-picked only when
-    // the user actually wants a different one.
+    // The bot account follows the strategy -- see the effect below.
     if (!selectedId) { setTrade(null); setBotData(null); return; }
     setLoadingTrade(true);
     fetch(`/api/options/trades/${selectedId}`)
@@ -548,6 +546,24 @@ export default function OptionsAnalysis() {
       .catch((e) => setError(e.message))
       .finally(() => setLoadingTrade(false));
   }, [selectedId, refreshTick]);
+
+  // The bot account that runs the selected strategy, picked for you.
+  //
+  // It used to be left to the user on the grounds that it was their choice of
+  // comparison rather than a property of the strategy. In practice there is
+  // only one right answer -- the bot running that coin on that account -- and
+  // leaving it unset meant every strategy opened with no bot half at all and
+  // a notice asking for an account to be chosen.
+  //
+  // Cleared, not left alone, when nothing matches: options HFT5 trades ETH and
+  // SOL and the grid bot has no HFT5, so holding on to the previous choice
+  // would have put another coin's bot figures beside this strategy.
+  useEffect(() => {
+    if (!trade || !accounts.length) return;
+    const optAcct = optAccounts.find((a) => String(a.id) === String(trade.account_id))?.name;
+    const resolved = botAccountFor(canonToken(trade.token), optAcct, accounts.map((a) => a.token_name));
+    setSelectedAccount(resolved || "");
+  }, [trade, accounts, optAccounts]);
 
   useEffect(() => {
     if (!trade || !selectedAccount) { setBotData(null); return; }
