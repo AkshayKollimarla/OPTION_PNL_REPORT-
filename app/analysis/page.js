@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   BOT_DETAILS_LEFT,
   BOT_DETAILS_RIGHT,
@@ -8,13 +9,19 @@ import {
   formatValue,
 } from "../../lib/fields";
 
-export default function Analysis() {
-  const [symbol,   setSymbol]   = useState("");
+function AnalysisInner() {
+  // Opened from a coin on the Summary Report, the page arrives with that
+  // coin, account and day already in the url, so it lands on that bot's
+  // parameter sheet instead of on everything ever recorded. Read as the
+  // starting value of each filter, not as a lock: the dropdowns still work
+  // from there.
+  const params = useSearchParams();
+  const [symbol,   setSymbol]   = useState(params.get("symbol")  || "");
   const [symbols,  setSymbols]  = useState([]);
-  const [account,  setAccount]  = useState("");
+  const [account,  setAccount]  = useState(params.get("account") || "");
   const [accounts, setAccounts] = useState([]);
-  const [from,     setFrom]     = useState("");
-  const [to,       setTo]       = useState("");
+  const [from,     setFrom]     = useState(params.get("from")    || "");
+  const [to,       setTo]       = useState(params.get("to")      || "");
 
   const [data,    setData]    = useState(null);
   const [loading, setLoading] = useState(false);
@@ -267,4 +274,14 @@ function formatDatetime(dt) {
   const d = new Date(String(dt).replace(" ", "T"));
   if (isNaN(d)) return String(dt);
   return d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+// useSearchParams needs a Suspense boundary, or the whole page falls back to
+// client-side rendering and the server sends an empty shell.
+export default function Analysis() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-slate-400">Loading…</div>}>
+      <AnalysisInner />
+    </Suspense>
+  );
 }

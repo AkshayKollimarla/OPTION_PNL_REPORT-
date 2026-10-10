@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 
 const METRICS = [
   { key: "rtps",          label: "RTPS",        color: "blue"   },
@@ -179,15 +180,28 @@ export default function SummaryReport() {
                   {sorted.map((t) => (
                     <tr key={`${t.token_symbol}__${t.token_name}`} className="hover:bg-slate-50/80 transition-colors">
                       <td className="px-5 py-4">
-                        <div className="flex items-center gap-3">
+                        {/* Through to this coin's bot parameter sheet, carrying
+                            the account and the day being looked at so the
+                            Analysis page opens on the same entry rather than on
+                            the whole history. */}
+                        <Link
+                          href={`/analysis?${new URLSearchParams({
+                            symbol: t.token_symbol || "",
+                            ...(t.token_name ? { account: t.token_name } : {}),
+                            ...(date ? { from: date, to: date } : {}),
+                          })}`}
+                          title={`Bot parameters for ${t.token_symbol}${date ? ` on ${date}` : ""}`}
+                          className="flex items-center gap-3 group">
                           <TokenIcon symbol={t.token_symbol} />
                           <div>
-                            <p className="font-semibold text-slate-800">{t.token_symbol}</p>
+                            <p className="font-semibold text-slate-800 group-hover:text-brand group-hover:underline">
+                              {t.token_symbol}
+                            </p>
                             {t.token_name && t.token_name !== t.token_symbol && (
                               <p className="text-xs text-slate-400">{t.token_name}</p>
                             )}
                           </div>
-                        </div>
+                        </Link>
                       </td>
                       <td className="px-4 py-4 text-right font-medium text-slate-700">{fmtNum(t.rtps, 2)}</td>
                       {/* Blue, not green: RTP PNL is a component of Net PL, and
