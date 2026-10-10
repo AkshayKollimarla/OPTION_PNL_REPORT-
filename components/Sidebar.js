@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Logo from "./Logo";
 import { usePathname, useRouter } from "next/navigation";
 import ThemeToggle from "./ThemeToggle";
 
@@ -35,10 +36,8 @@ export default function Sidebar() {
   return (
     <aside className="w-60 shrink-0 bg-navy text-slate-300 flex flex-col">
       <div className="flex items-center gap-2 px-5 h-16 border-b border-white/10">
-        <div className="grid h-9 w-9 place-items-center rounded-lg bg-brand text-white font-bold">
-          ▲
-        </div>
-        <span className="text-white font-semibold tracking-wide">GridBot</span>
+        <Logo className="h-9 w-9 shrink-0" />
+        <span className="text-white font-semibold tracking-wide text-sm">STRING TRADING</span>
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
@@ -82,7 +81,7 @@ export default function Sidebar() {
           <LogoutIcon className="h-5 w-5" />
           Logout
         </button>
-        <p className="px-2 text-xs text-slate-600">Trading Bot Analytics</p>
+        <p className="px-2 text-xs text-slate-600">String Trading</p>
       </div>
     </aside>
   );

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="String Trading">
+    <path d="M50.0 50.0 Q33.24 41.09 56.72 18.39" fill="none" stroke="#F96700" stroke-width="4.4" stroke-linecap="round" />
+    <circle cx="57.59" cy="14.30" r="7.6" fill="#F96700" />
+    <path d="M50.0 50.0 Q44.45 31.85 77.11 32.40" fill="none" stroke="#E55C03" stroke-width="4.4" stroke-linecap="round" />
+    <circle cx="80.61" cy="30.12" r="7.6" fill="#E55C03" />
+    <path d="M50.0 50.0 Q58.91 33.24 81.61 56.72" fill="none" stroke="#C24808" stroke-width="4.4" stroke-linecap="round" />
+    <circle cx="85.70" cy="57.59" r="7.6" fill="#C24808" />
+    <path d="M50.0 50.0 Q68.15 44.45 67.60 77.11" fill="none" stroke="#A5370D" stroke-width="4.4" stroke-linecap="round" />
+    <circle cx="69.88" cy="80.61" r="7.6" fill="#A5370D" />
+    <path d="M50.0 50.0 Q66.76 58.91 43.28 81.61" fill="none" stroke="#9F340E" stroke-width="4.4" stroke-linecap="round" />
+    <circle cx="42.41" cy="85.70" r="7.6" fill="#9F340E" />
+    <path d="M50.0 50.0 Q55.55 68.15 22.89 67.60" fill="none" stroke="#B33F0B" stroke-width="4.4" stroke-linecap="round" />
+    <circle cx="19.39" cy="69.88" r="7.6" fill="#B33F0B" />
+    <path d="M50.0 50.0 Q41.09 66.76 18.39 43.28" fill="none" stroke="#D65306" stroke-width="4.4" stroke-linecap="round" />
+    <circle cx="14.30" cy="42.41" r="7.6" fill="#D65306" />
+    <path d="M50.0 50.0 Q31.85 55.55 32.40 22.89" fill="none" stroke="#F36401" stroke-width="4.4" stroke-linecap="round" />
+    <circle cx="30.12" cy="19.39" r="7.6" fill="#F36401" />
+</svg>

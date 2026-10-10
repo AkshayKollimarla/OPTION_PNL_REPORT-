@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Logo from "../../components/Logo";
 import ThemeToggle from "../../components/ThemeToggle";
 
 export default function LoginPage() {
@@ -44,10 +45,8 @@ export default function LoginPage() {
 
         {/* Logo block */}
         <div className="flex flex-col items-center mb-8">
-          <div className="grid h-14 w-14 place-items-center rounded-2xl bg-brand text-white text-2xl font-bold shadow-lg mb-4">
-            ▲
-          </div>
-          <h1 className="text-2xl font-bold text-white">GridBot Analytics</h1>
+          <Logo className="h-16 w-16 mb-4" />
+          <h1 className="text-2xl font-bold text-white tracking-wide">STRING TRADING</h1>
           <p className="text-sm text-slate-400 mt-1">Sign in to your dashboard</p>
         </div>
 
@@ -113,7 +112,7 @@ export default function LoginPage() {
         </div>
 
         <p className="text-center text-xs text-slate-600 mt-6">
-          Trading Bot Analytics · Secure Access
+          String Trading · Secure Access
         </p>
       </div>
     </div>

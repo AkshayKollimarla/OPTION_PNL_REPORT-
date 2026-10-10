@@ -2,8 +2,8 @@ import "./globals.css";
 import AppShell from "../components/AppShell";
 
 export const metadata = {
-  title: "Trading Bot Analytics",
-  description: "Grid trading bot analytics dashboard with manual data entry",
+  title: "String Trading",
+  description: "String Trading — grid bot and options analytics",
 };
 
 // Runs before the first paint, so the stored theme is already on <html> when
