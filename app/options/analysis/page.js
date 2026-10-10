@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, Fragment } from "react";
 import Link from "next/link";
 import StrategySelect from "../../../components/StrategySelect";
 import useDataVersion from "../../../lib/useDataVersion";
@@ -245,6 +245,9 @@ export default function OptionsAnalysis() {
   const [accountExchangeById, setAccountExchangeById] = useState({});
   const [optAccounts, setOptAccounts] = useState([]);   // options-side accounts
   const [cumBot,     setCumBot]     = useState(null);
+  // Which coin's strategies are unfolded under it. One at a time: the point is
+  // to read one coin's book, and several open at once buries the table.
+  const [openToken,  setOpenToken]  = useState(null);
   const [loadingCum, setLoadingCum] = useState(false);
   // The filters the report on screen was actually run with — distinct from
   // the inputs above, which can be edited without pressing Load. Keeping them
@@ -649,6 +652,28 @@ export default function OptionsAnalysis() {
   const hasFilters  = filterToken !== "all" || filterStatus !== "all" || filterDateFrom || filterDateTo || selectedAccount;
 
   // Per-day map (date string → day row)
+  // Jump from a strategy listed under a coin to its own analysis.
+  //
+  // The Strategy Analysis filters are widened first. Its list is filtered
+  // independently of this report, so a strategy perfectly visible here can be
+  // absent there -- and the selector would then have nothing to show for the
+  // id just handed to it.
+  //
+  // The id is the one its own list would use: the first leg of the group in
+  // allTrades order, not whichever leg this report happened to read first.
+  const openStrategy = useCallback((gid, legId) => {
+    setFilterToken("all");
+    setFilterStatus("all");
+    setFilterDateFrom("");
+    setFilterDateTo("");
+    const first = gid
+      ? allTrades.find((t) => t.group_id != null && String(t.group_id) === String(gid))
+      : allTrades.find((t) => String(t.id) === String(legId));
+    setSelectedId(String(first?.id ?? legId));
+    setActiveTab("analysis");
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [allTrades]);
+
   // Days this strategy's bot window shares with another strategy on the same
   // coin and account -- see lib/strategy-overlap.js for why this is flagged.
   //
@@ -1177,7 +1202,7 @@ export default function OptionsAnalysis() {
                 const acct = t.account_id != null ? (acctNameById[t.account_id] || String(t.account_id)) : "—";
                 const key = `${sym}||${acct}`;
                 if (!optByToken[key]) {
-                  optByToken[key] = { token: sym, account: acct, pnl: 0, strategies: 0, invSum: 0, invCount: 0, spans: [] };
+                  optByToken[key] = { token: sym, account: acct, key, pnl: 0, strategies: 0, invSum: 0, invCount: 0, spans: [], byStrategy: new Map() };
                 }
                 const b = optByToken[key];
                 b.pnl += optionPnlOf(t);
@@ -1188,6 +1213,31 @@ export default function OptionsAnalysis() {
                 const gid = t.group_id == null ? null : String(t.group_id);
                 const isNewStrategy = gid === null || !seenGroups.has(gid);
                 if (gid !== null) seenGroups.add(gid);
+
+                // The same legs again, kept per strategy rather than summed
+                // into the coin, so the row can be unfolded into the
+                // strategies behind it.
+                const sKey = gid === null ? `s:${t.id}` : `g:${gid}`;
+                let st = b.byStrategy.get(sKey);
+                if (!st) {
+                  st = { key: sKey, gid, legId: t.id, legs: 0, fut: 0, opt: 0, net: 0,
+                         entry: toLocalDateStr(t.entry_date), end: toLocalDateStr(t.end_date),
+                         open: false, types: new Set(), investment: null };
+                  b.byStrategy.set(sKey, st);
+                }
+                st.legs += 1;
+                st.fut += Number(t.fut_pnl || 0);
+                st.opt += Number(t.opt_pnl || 0);
+                st.net += optionPnlOf(t);
+                if (t.option_type) st.types.add(String(t.option_type).toUpperCase());
+                // Open while ANY leg is: a structure is not closed until every
+                // leg is.
+                if (t.status === "open") st.open = true;
+                if (st.investment == null && Number(t.investment) > 0) st.investment = Number(t.investment);
+                const legEnd = toLocalDateStr(t.end_date);
+                if (legEnd && (!st.end || legEnd > st.end)) st.end = legEnd;
+                const legEntry = toLocalDateStr(t.entry_date);
+                if (legEntry && (!st.entry || legEntry < st.entry)) st.entry = legEntry;
                 if (isNewStrategy) {
                   b.strategies += 1;
                   // Capital behind the strategy. Every leg of a group carries
@@ -1337,8 +1387,21 @@ export default function OptionsAnalysis() {
                               // together instead of scattering across the table.
                               .sort((a, b) => a[1].token.localeCompare(b[1].token) || b[1].pnl - a[1].pnl)
                               .map(([key, b]) => (
-                              <tr key={key} className="border-b border-dashed border-slate-100 last:border-0 hover:bg-slate-50/60">
-                                <td className="py-2.5 px-3 text-sm font-semibold text-teal-700">{b.token}</td>
+                              <Fragment key={key}>
+                              <tr className="border-b border-dashed border-slate-100 last:border-0 hover:bg-slate-50/60">
+                                <td className="py-2.5 px-3 text-sm font-semibold text-teal-700">
+                                  {/* Unfolds into the strategies behind this
+                                      row. The figures beside it are their sum,
+                                      and a sum cannot say which strategy
+                                      earned it. */}
+                                  <button
+                                    onClick={() => setOpenToken(openToken === key ? null : key)}
+                                    title={openToken === key ? "Hide these strategies" : `Show the ${b.strategies} strateg${b.strategies === 1 ? "y" : "ies"} behind this`}
+                                    className="inline-flex items-center gap-1.5 hover:underline">
+                                    <span className={`text-[10px] text-teal-400 transition-transform ${openToken === key ? "rotate-90" : ""}`}>&#9654;</span>
+                                    {b.token}
+                                  </button>
+                                </td>
                                 <td className="py-2.5 px-3 text-left text-sm text-slate-600">{b.account}</td>
                                 <td className="py-2.5 px-3 text-right text-sm text-slate-600">{b.strategies}</td>
                                 <td className="py-2.5 px-3 text-right text-sm text-slate-600">{b.days || "—"}</td>
@@ -1361,6 +1424,66 @@ export default function OptionsAnalysis() {
                                   {b.apy == null ? "—" : `${b.apy.toFixed(2)}%`}
                                 </td>
                               </tr>
+
+                              {openToken === key && (
+                                <tr className="border-b border-slate-100 bg-slate-50/70">
+                                  <td colSpan={8} className="px-3 pb-4 pt-1">
+                                    <table className="w-full text-xs border-collapse">
+                                      <thead>
+                                        <tr className="border-b border-slate-200">
+                                          {["Strategy", "Legs", "Status", "Futures PNL", "Options PNL", "Net Booked"].map((h) => (
+                                            <th key={h} className={`py-1.5 px-3 text-[10px] font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap ${h === "Strategy" ? "text-left" : h === "Legs" || h === "Status" ? "text-center" : "text-right"}`}>{h}</th>
+                                          ))}
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {[...b.byStrategy.values()]
+                                          .sort((x, y) => (x.entry < y.entry ? 1 : x.entry > y.entry ? -1 : 0))
+                                          .map((st) => (
+                                          <tr key={st.key}
+                                              onClick={() => openStrategy(st.gid, st.legId)}
+                                              title="Open this strategy in Strategy Analysis"
+                                              className="cursor-pointer border-b border-dashed border-slate-100 last:border-0 hover:bg-white">
+                                            <td className="py-2 px-3 text-left whitespace-nowrap">
+                                              <span className="font-semibold text-slate-700 hover:underline">
+                                                {st.entry ? fmt(st.entry) : "\u2014"}
+                                              </span>
+                                              <span className="text-slate-400"> &rarr; {st.end ? fmt(st.end) : "open"}</span>
+                                              {st.types.size > 0 && (
+                                                <span className="ml-2 text-[10px] uppercase text-slate-400">{[...st.types].join(" / ")}</span>
+                                              )}
+                                            </td>
+                                            <td className="py-2 px-3 text-center text-slate-500">{st.legs}</td>
+                                            <td className="py-2 px-3 text-center">
+                                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${st.open ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                                                {st.open ? "open" : "closed"}
+                                              </span>
+                                            </td>
+                                            <td className={`py-2 px-3 text-right font-semibold ${st.fut >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(st.fut)}</td>
+                                            <td className={`py-2 px-3 text-right font-semibold ${st.opt >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(st.opt)}</td>
+                                            <td className={`py-2 px-3 text-right font-bold ${st.net >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(st.net)}</td>
+                                          </tr>
+                                        ))}
+                                        {/* The parts against the whole: this
+                                            line must equal the coin row above. */}
+                                        <tr className="border-t border-slate-200 font-semibold">
+                                          <td className="py-2 px-3 text-left text-slate-500" colSpan={3}>
+                                            {b.strategies} strateg{b.strategies === 1 ? "y" : "ies"} &middot; click one to open it
+                                          </td>
+                                          <td className="py-2 px-3 text-right text-slate-600">
+                                            {fmtCcy([...b.byStrategy.values()].reduce((a, x) => a + x.fut, 0))}
+                                          </td>
+                                          <td className="py-2 px-3 text-right text-slate-600">
+                                            {fmtCcy([...b.byStrategy.values()].reduce((a, x) => a + x.opt, 0))}
+                                          </td>
+                                          <td className={`py-2 px-3 text-right ${b.pnl >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(b.pnl)}</td>
+                                        </tr>
+                                      </tbody>
+                                    </table>
+                                  </td>
+                                </tr>
+                              )}
+                              </Fragment>
                             ))}
                             <tr className="border-t-2 border-slate-200 bg-slate-50 font-bold">
                               <td className="py-2.5 px-3 text-sm text-slate-700" colSpan={2}>TOTAL</td>
