@@ -558,17 +558,34 @@ export default function OptionsAnalysis({ view = "analysis" }) {
 
   // Legs of whatever is selected, so the panel can total the structure rather
   // than report whichever leg happened to be first.
-  const selectedUnit = useMemo(
-    () => strategyUnits.find((u) => u.id === String(selectedId)) || null,
-    [strategyUnits, selectedId]
-  );
+  // Matched on the unit's own id first, then on any leg of it.
+  //
+  // A unit is identified by its first leg, and which leg that is depends on
+  // the order the list happens to arrive in. A link from Options Summary
+  // carries one leg's id, and if that is not the leg this page calls first,
+  // the lookup found nothing and the panel fell back to showing that single
+  // leg -- one column in the Option Details sheet instead of four, and a
+  // booked PnL of whatever that leg alone carried, which for most structures
+  // is 0 because the figure sits on a later leg.
+  const selectedUnit = useMemo(() => {
+    const id = String(selectedId);
+    if (!id) return null;
+    return strategyUnits.find((u) => u.id === id)
+        || strategyUnits.find((u) => u.legs.some((l) => String(l.id) === id))
+        || null;
+  }, [strategyUnits, selectedId]);
   const unitLegs = selectedUnit ? selectedUnit.legs : (trade ? [trade] : []);
 
+  // Drop a selection the filters have hidden -- but not before the list has
+  // arrived. filteredTrades is empty on the first render, so a strategy named
+  // in the url was being cleared a moment after it was read, before there was
+  // anything to find it in.
   useEffect(() => {
+    if (loadingList || !allTrades.length) return;
     if (selectedId && !filteredTrades.find((t) => String(t.id) === String(selectedId))) {
       setSelectedId("");
     }
-  }, [filteredTrades, selectedId]);
+  }, [loadingList, allTrades, filteredTrades, selectedId]);
 
   useEffect(() => {
     // The bot account follows the strategy -- see the effect below.
