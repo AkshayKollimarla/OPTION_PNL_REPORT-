@@ -1761,9 +1761,14 @@ function SimulatorInner() {
                   expiry has passed reads the same in both. */}
               {[
                 { label: "Upside Expiry PNL",   value: upside.net },
-                { label: "Today Upside PNL",    value: bsUpsideToday },
+                // The whole structure, not its options half: the futures leg
+                // and any MM loss count the same way they do in the scenario
+                // block below, which totals bsToday + fut + mm. Shipped with
+                // the options figure alone, this card read -225 against the
+                // block's 975 for the same position.
+                { label: "Today Upside PNL",    value: bsUpsideToday + upside.fut + upside.mm },
                 { label: "Downside Expiry PNL", value: downside.net },
-                { label: "Today Downside PNL",  value: bsDownsideToday },
+                { label: "Today Downside PNL",  value: bsDownsideToday + downside.fut + downside.mm },
               ].map((c) => (
                 <div key={c.label}
                   className={`rounded-lg border px-4 py-2.5 ${c.value < 0 ? "border-red-100 bg-red-50/60" : "border-emerald-100 bg-emerald-50/60"}`}>
