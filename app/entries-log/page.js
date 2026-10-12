@@ -3,9 +3,37 @@
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { formatValue, METRIC_CARDS } from "../../lib/fields";
+import { toCsv, downloadCsv, csvName, num, perRtpPnl } from "../../lib/csv";
 
 const PREVIEW_METRICS = ["rtp_pnl", "net_pnl", "volume", "apy"];
 const previewFields = METRIC_CARDS.filter((f) => PREVIEW_METRICS.includes(f.key));
+
+// What the download holds, in this order.
+//
+// The figures asked for, with the date, coin and account in front of them: a
+// file of numbers with nothing saying which coin or day they belong to cannot
+// be reconciled against anything.
+//
+// Per RTP PNL is not a stored column -- it is RTP PNL divided by the RTPs that
+// earned it, which is the figure the entry log shows per row.
+const CSV_COLUMNS = [
+  { header: "Date",                value: (r) => formatDatetime(r.entry_datetime) },
+  { header: "Token",               value: (r) => r.token_name },
+  { header: "Symbol",              value: (r) => r.token_symbol },
+  { header: "Account",             value: (r) => r.account },
+  { header: "Exchange",            value: (r) => r.exchange },
+  { header: "Investment",          value: (r) => num(r.investment) },
+  { header: "RTPS",                value: (r) => num(r.rtps, 4) },
+  { header: "Per RTP PNL",         value: (r) => num(perRtpPnl(r.rtp_pnl, r.rtps), 4) },
+  { header: "RTP PNL",             value: (r) => num(r.rtp_pnl) },
+  { header: "Per Hour RTP",        value: (r) => num(r.per_hour_rtps, 4) },
+  { header: "Rebates",             value: (r) => num(r.rebates) },
+  { header: "Flatten",             value: (r) => num(r.flatten_pnl) },
+  { header: "Hedge Recovery PNL",  value: (r) => num(r.gamma_booked) },
+  { header: "Net PNL",             value: (r) => num(r.net_pnl) },
+  { header: "Volume",              value: (r) => num(r.volume) },
+  { header: "APY",                 value: (r) => num(r.apy) },
+];
 
 function baseSymbol(name) { return name ? name.split("-")[0] : ""; }
 
@@ -192,6 +220,21 @@ export default function EntriesLog() {
                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none" />
             </div>
             <div className="flex items-end gap-2">
+              {/* Exports what is on screen, filters and all -- a download that
+                  quietly gave you the whole table would not match the figures
+                  it sits beside. */}
+              <button
+                onClick={() => downloadCsv(
+                  csvName("entry-log", filterFrom, filterTo),
+                  toCsv(filtered, CSV_COLUMNS),
+                )}
+                disabled={!filtered.length}
+                title={filtered.length
+                  ? `Download these ${filtered.length} row${filtered.length === 1 ? "" : "s"} as CSV`
+                  : "Nothing to download"}
+                className="whitespace-nowrap rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 disabled:hover:bg-emerald-50">
+                &darr; CSV
+              </button>
               {hasFilters && (
                 <button onClick={() => { setFilterExchange("all"); setFilterSymbol("all"); setFilterAccount("all"); setFilterFrom(""); setFilterTo(""); }}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-500 hover:bg-slate-50">

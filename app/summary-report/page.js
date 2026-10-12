@@ -2,9 +2,15 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { toCsv, downloadCsv, csvName, num, perRtpPnl } from "../../lib/csv";
 
+// per_rtp_pnl is not a column in the database -- it is RTP PNL over the RTPs
+// that earned it, computed per row below. It is listed here so it sorts and
+// exports like any other figure.
 const METRICS = [
+  { key: "total_investment", label: "Investment", color: "slate" },
   { key: "rtps",          label: "RTPS",        color: "blue"   },
+  { key: "per_rtp_pnl",   label: "Per RTP PNL", color: "cyan"   },
   { key: "rtp_pnl",       label: "RTP PNL",     color: "cyan"   },
   { key: "per_hour_rtps", label: "Per Hour RTP", color: "slate"  },
   { key: "rebates",       label: "Rebates",     color: "orange" },
@@ -13,6 +19,25 @@ const METRICS = [
   { key: "net_pnl",       label: "Net PL",      color: "green"  },
   { key: "volume",        label: "Volume",      color: "blue"   },
   { key: "apy",           label: "APY",         color: "purple" },
+];
+
+// The download mirrors the table: the same rows, in the same order, with the
+// coin and account in front so a file can be reconciled against the screen it
+// came from.
+const CSV_COLUMNS = [
+  { header: "Token",               value: (t) => t.token_symbol },
+  { header: "Account",             value: (t) => t.token_name },
+  { header: "Investment",          value: (t) => num(t.total_investment) },
+  { header: "RTPS",                value: (t) => num(t.rtps, 4) },
+  { header: "Per RTP PNL",         value: (t) => num(t.per_rtp_pnl, 4) },
+  { header: "RTP PNL",             value: (t) => num(t.rtp_pnl) },
+  { header: "Per Hour RTP",        value: (t) => num(t.per_hour_rtps, 4) },
+  { header: "Rebates",             value: (t) => num(t.rebates) },
+  { header: "Flatten",             value: (t) => num(t.flatten_pnl) },
+  { header: "Hedge Recovery PNL",  value: (t) => num(t.gamma_booked) },
+  { header: "Net PNL",             value: (t) => num(t.net_pnl) },
+  { header: "Volume",              value: (t) => num(t.volume) },
+  { header: "APY",                 value: (t) => num(t.apy) },
 ];
 
 export default function SummaryReport() {
@@ -51,7 +76,11 @@ export default function SummaryReport() {
 
   useEffect(() => { load(); }, [load]);
 
-  const tokens = data?.tokens || [];
+  // Carried on the row so the column sorts and exports like a stored one.
+  const tokens = (data?.tokens || []).map((t) => ({
+    ...t,
+    per_rtp_pnl: perRtpPnl(t.rtp_pnl, t.rtps),
+  }));
 
   const sorted = [...tokens].sort((a, b) => {
     const av = Number(a[sortCol] ?? 0);
@@ -149,6 +178,21 @@ export default function SummaryReport() {
               </select>
             </div>
           </div>
+
+          {/* Exports exactly what the table is showing: the same rows, the
+              same order, under whatever date, exchange and symbol are set. */}
+          <button
+            onClick={() => downloadCsv(csvName("summary-report", date, date), toCsv(sorted, CSV_COLUMNS))}
+            disabled={!sorted.length}
+            title={sorted.length
+              ? `Download these ${sorted.length} row${sorted.length === 1 ? "" : "s"} as CSV`
+              : "Nothing to download"}
+            className="flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100 disabled:opacity-50 disabled:hover:bg-emerald-50">
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            CSV
+          </button>
         </div>
 
         {/* Table */}
@@ -203,7 +247,11 @@ export default function SummaryReport() {
                           </div>
                         </Link>
                       </td>
+                      <td className="px-4 py-4 text-right font-medium text-slate-700">{fmtCcy(t.total_investment)}</td>
                       <td className="px-4 py-4 text-right font-medium text-slate-700">{fmtNum(t.rtps, 2)}</td>
+                      <td className="px-4 py-4 text-right font-medium text-slate-600">
+                        {t.per_rtp_pnl != null ? fmtCcy(t.per_rtp_pnl) : "—"}
+                      </td>
                       {/* Blue, not green: RTP PNL is a component of Net PL, and
                           two green money columns read as two results. */}
                       <td className="px-4 py-4 text-right font-semibold text-blue-600">{fmtCcy(t.rtp_pnl)}</td>
