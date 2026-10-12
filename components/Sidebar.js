@@ -19,7 +19,8 @@ const optionsNav = [
   { href: "/options/exit",       label: "Options Exit",        icon: ExitIcon       },
   { href: "/options/add",        label: "Add Strategy",        icon: PlusIcon       },
   { href: "/options/simulator",  label: "Combined Simulator",  icon: SimulatorIcon  },
-  { href: "/options/analysis",   label: "Options Analysis",    icon: ChartIcon      },
+  { href: "/options/analysis",   label: "Strategy Analysis",   icon: ChartIcon      },
+  { href: "/options/summary",    label: "Options Summary",     icon: ChartIcon      },
   { href: "/accounts",           label: "Accounts",            icon: AccountsIcon   },
 ];
 
