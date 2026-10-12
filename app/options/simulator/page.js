@@ -637,6 +637,21 @@ function SimulatorInner() {
     return s + legBsTodayPnl(l.form, opt, S + (parseFloat(l.form.upside_distance) || 0), bsDaysFwd);
   }, 0);
 
+  // Priced at day 0 whatever the scenario slider says: a card labelled Today
+  // must mean today. The figures the slider drives are bsUpsideCombined and
+  // bsDownsideCombined, which the scenario rows below use.
+  const bsUpsideToday = legs.reduce((s, l) => {
+    const S   = parseFloat(l.form.fut_entry_price) || 0;
+    const opt = (l.form.option_type || "PUT").toUpperCase();
+    return s + legBsTodayPnl(l.form, opt, S + (parseFloat(l.form.upside_distance) || 0), 0);
+  }, 0);
+
+  const bsDownsideToday = legs.reduce((s, l) => {
+    const S   = parseFloat(l.form.fut_entry_price) || 0;
+    const opt = (l.form.option_type || "PUT").toUpperCase();
+    return s + legBsTodayPnl(l.form, opt, S - (parseFloat(l.form.down_distance) || 0), 0);
+  }, 0);
+
   const bsDownsideCombined = legs.reduce((s, l) => {
     const S   = parseFloat(l.form.fut_entry_price) || 0;
     const opt = (l.form.option_type || "PUT").toUpperCase();
@@ -1723,8 +1738,7 @@ function SimulatorInner() {
 
           {/* What each side cost to put on. Reading it off the cards meant
               subtracting two numbers sitting in different columns. */}
-          {(spreads.call || spreads.put) && (
-            <div className="mb-6 flex flex-wrap gap-3">
+          <div className="mb-6 flex flex-wrap gap-3">
               {[spreads.call, spreads.put].filter(Boolean).map((sp) => (
                 <div key={sp.side}
                   className={`rounded-lg border px-4 py-2.5 ${sp.side === "CALL" ? "border-emerald-100 bg-emerald-50/60" : "border-sky-100 bg-sky-50/60"}`}>
@@ -1740,8 +1754,28 @@ function SimulatorInner() {
                   </p>
                 </div>
               ))}
+              {/* What the structure makes at expiry and what it is worth as it
+                  stands, each way the underlying can go. The Expiry figures are
+                  payoffs and carry no time value; the Today ones are priced
+                  with whatever time is left, which is why a strategy whose
+                  expiry has passed reads the same in both. */}
+              {[
+                { label: "Upside Expiry PNL",   value: upside.net },
+                { label: "Today Upside PNL",    value: bsUpsideToday },
+                { label: "Downside Expiry PNL", value: downside.net },
+                { label: "Today Downside PNL",  value: bsDownsideToday },
+              ].map((c) => (
+                <div key={c.label}
+                  className={`rounded-lg border px-4 py-2.5 ${c.value < 0 ? "border-red-100 bg-red-50/60" : "border-emerald-100 bg-emerald-50/60"}`}>
+                  <p className={`text-[11px] font-semibold uppercase tracking-wide ${c.value < 0 ? "text-red-600" : "text-emerald-700"}`}>
+                    {c.label}
+                  </p>
+                  <p className={`text-lg font-bold leading-tight ${c.value < 0 ? "text-red-600" : "text-emerald-600"}`}>
+                    {fmtCcy(c.value)}
+                  </p>
+                </div>
+              ))}
             </div>
-          )}
 
           {/* Scenario clock. Only the Black-Scholes rows move with it — the
               "Net ... Pnl Expiry" figures above are expiry payoffs and have no time
