@@ -593,15 +593,45 @@ function SimulatorInner() {
     net: deriveds.reduce((s, d) => s + n(d.estimated_downside_net_pnl), 0),
   };
 
+  // A YYYY-MM-DD read as local midnight. new Date("2026-09-30") is UTC
+  // midnight, which west of Greenwich is the evening before -- and a date a
+  // day out moves every scenario figure with it.
+  function parseLocalDate(str) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(str || ""));
+    return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
+  }
+
+  // The day a leg is valued from.
+  //
+  // A live strategy is valued from today: time really has passed and the
+  // decay is real. A closed one is not. Valuing it from today means its
+  // expiry is behind us, no time value is left, and every "today" figure
+  // collapses onto the expiry payoff -- so a closed structure read the same
+  // up and down as it did at expiry, which says nothing about how it looked
+  // when it was put on. It is valued from its entry date instead: the day it
+  // was simulated.
+  function valuationDate(form) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    if (String(form.status || "open").toLowerCase() !== "closed") return today;
+    return parseLocalDate(form.entry_date) || today;
+  }
+
   // Days remaining for a leg, optionally rolled forward. Every scenario reads
   // its horizon from here so one leg cannot be priced on a different date
   // from another.
   function legDte(form, daysFwd = 0) {
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const expD  = form.expiry ? (() => { const d = new Date(form.expiry); d.setHours(0,0,0,0); return d; })() : null;
-    const dte   = expD ? Math.max(0, Math.round((expD - today) / 86400000)) : 0;
+    const from = valuationDate(form);
+    const expD = parseLocalDate(form.expiry);
+    const dte  = expD ? Math.max(0, Math.round((expD - from) / 86400000)) : 0;
     return Math.max(0, dte - (daysFwd || 0));
   }
+
+  // True while any leg is being valued from its entry date rather than today,
+  // so the page can say so instead of labelling it Today.
+  const valuedAtEntry = legs.some((l) => String(l.form.status || "open").toLowerCase() === "closed");
+  const valuationLabel = valuedAtEntry
+    ? (legs.find((l) => String(l.form.status || "open").toLowerCase() === "closed")?.form.entry_date || "")
+    : "";
 
   // PnL for a leg at a target underlying, `daysFwd` days from now.
   //
@@ -1760,24 +1790,31 @@ function SimulatorInner() {
                   with whatever time is left, which is why a strategy whose
                   expiry has passed reads the same in both. */}
               {[
-                { label: "Upside Expiry PNL",   value: upside.net },
+                { label: "Upside Expiry PNL",   value: upside.net, dir: "up" },
                 // The whole structure, not its options half: the futures leg
                 // and any MM loss count the same way they do in the scenario
                 // block below, which totals bsToday + fut + mm. Shipped with
                 // the options figure alone, this card read -225 against the
                 // block's 975 for the same position.
-                { label: "Today Upside PNL",    value: bsUpsideToday + upside.fut + upside.mm },
-                { label: "Downside Expiry PNL", value: downside.net },
-                { label: "Today Downside PNL",  value: bsDownsideToday + downside.fut + downside.mm },
+                { label: "Today Upside PNL",    value: bsUpsideToday + upside.fut + upside.mm, dir: "up", asOf: true },
+                { label: "Downside Expiry PNL", value: downside.net, dir: "down" },
+                { label: "Today Downside PNL",  value: bsDownsideToday + downside.fut + downside.mm, dir: "down", asOf: true },
               ].map((c) => (
                 <div key={c.label}
                   className={`rounded-lg border px-4 py-2.5 ${c.value < 0 ? "border-red-100 bg-red-50/60" : "border-emerald-100 bg-emerald-50/60"}`}>
                   <p className={`text-[11px] font-semibold uppercase tracking-wide ${c.value < 0 ? "text-red-600" : "text-emerald-700"}`}>
+                    <span className="mr-1">{c.dir === "up" ? "\u2191" : "\u2193"}</span>
                     {c.label}
                   </p>
                   <p className={`text-lg font-bold leading-tight ${c.value < 0 ? "text-red-600" : "text-emerald-600"}`}>
                     {fmtCcy(c.value)}
                   </p>
+                  {/* A closed strategy is priced from the day it was put on,
+                      so the card says which day that is rather than letting
+                      "Today" stand for a date months back. */}
+                  {c.asOf && valuedAtEntry && valuationLabel && (
+                    <p className="text-[10px] text-slate-400">as at {valuationLabel.split("-").reverse().join("-")}</p>
+                  )}
                 </div>
               ))}
             </div>
