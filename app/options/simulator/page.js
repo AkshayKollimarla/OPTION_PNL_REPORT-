@@ -661,25 +661,27 @@ function SimulatorInner() {
     : bsDaysFwd >= maxDte ? "Expiry BS"
     : `Day ${bsDaysFwd + 1} BS`;
 
+  // The cards move with the scenario slider, so they have to say which day
+  // they are showing -- "Today" over a figure projected five days out would
+  // be worse than not moving at all.
+  const scenarioWord = bsDaysFwd <= 0 ? "Today"
+    : bsDaysFwd >= maxDte ? "Expiry Day"
+    : `Day ${bsDaysFwd + 1}`;
+
+  // The calendar date behind that word: the day the structure is valued from
+  // (today, or the entry date for a closed one) rolled forward by the slider.
+  const scenarioDate = (() => {
+    const base = legs.length ? valuationDate(legs[0].form) : new Date();
+    const d = new Date(base);
+    d.setDate(d.getDate() + Math.max(0, bsDaysFwd));
+    const p = (n) => String(n).padStart(2, "0");
+    return `${p(d.getDate())}-${p(d.getMonth() + 1)}-${d.getFullYear()}`;
+  })();
+
   const bsUpsideCombined = legs.reduce((s, l) => {
     const S   = parseFloat(l.form.fut_entry_price) || 0;
     const opt = (l.form.option_type || "PUT").toUpperCase();
     return s + legBsTodayPnl(l.form, opt, S + (parseFloat(l.form.upside_distance) || 0), bsDaysFwd);
-  }, 0);
-
-  // Priced at day 0 whatever the scenario slider says: a card labelled Today
-  // must mean today. The figures the slider drives are bsUpsideCombined and
-  // bsDownsideCombined, which the scenario rows below use.
-  const bsUpsideToday = legs.reduce((s, l) => {
-    const S   = parseFloat(l.form.fut_entry_price) || 0;
-    const opt = (l.form.option_type || "PUT").toUpperCase();
-    return s + legBsTodayPnl(l.form, opt, S + (parseFloat(l.form.upside_distance) || 0), 0);
-  }, 0);
-
-  const bsDownsideToday = legs.reduce((s, l) => {
-    const S   = parseFloat(l.form.fut_entry_price) || 0;
-    const opt = (l.form.option_type || "PUT").toUpperCase();
-    return s + legBsTodayPnl(l.form, opt, S - (parseFloat(l.form.down_distance) || 0), 0);
   }, 0);
 
   const bsDownsideCombined = legs.reduce((s, l) => {
@@ -1796,9 +1798,9 @@ function SimulatorInner() {
                 // block below, which totals bsToday + fut + mm. Shipped with
                 // the options figure alone, this card read -225 against the
                 // block's 975 for the same position.
-                { label: "Today Upside PNL",    value: bsUpsideToday + upside.fut + upside.mm, dir: "up", asOf: true },
+                { label: `${scenarioWord} Upside PNL`,   value: bsUpsideCombined + upside.fut + upside.mm, dir: "up", asOf: true },
                 { label: "Downside Expiry PNL", value: downside.net, dir: "down" },
-                { label: "Today Downside PNL",  value: bsDownsideToday + downside.fut + downside.mm, dir: "down", asOf: true },
+                { label: `${scenarioWord} Downside PNL`, value: bsDownsideCombined + downside.fut + downside.mm, dir: "down", asOf: true },
               ].map((c) => (
                 <div key={c.label}
                   className={`rounded-lg border px-4 py-2.5 ${c.value < 0 ? "border-red-100 bg-red-50/60" : "border-emerald-100 bg-emerald-50/60"}`}>
@@ -1812,11 +1814,11 @@ function SimulatorInner() {
                   <p className={`text-lg font-bold leading-tight ${c.value < 0 ? "text-red-600" : "text-emerald-600"}`}>
                     {fmtCcy(c.value)}
                   </p>
-                  {/* A closed strategy is priced from the day it was put on,
-                      so the card says which day that is rather than letting
-                      "Today" stand for a date months back. */}
-                  {c.asOf && valuedAtEntry && valuationLabel && (
-                    <p className="text-[10px] text-slate-400">as at {valuationLabel.split("-").reverse().join("-")}</p>
+                  {/* The day being priced, whenever that is not plainly today:
+                      a closed strategy is valued from the day it was put on,
+                      and the slider moves either kind forward. */}
+                  {c.asOf && (valuedAtEntry || bsDaysFwd > 0) && (
+                    <p className="text-[10px] text-slate-400">as at {scenarioDate}</p>
                   )}
                 </div>
               ))}
