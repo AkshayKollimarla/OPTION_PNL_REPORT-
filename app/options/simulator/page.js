@@ -1802,8 +1802,11 @@ function SimulatorInner() {
               ].map((c) => (
                 <div key={c.label}
                   className={`rounded-lg border px-4 py-2.5 ${c.value < 0 ? "border-red-100 bg-red-50/60" : "border-emerald-100 bg-emerald-50/60"}`}>
-                  <p className={`text-[11px] font-semibold uppercase tracking-wide ${c.value < 0 ? "text-red-600" : "text-emerald-700"}`}>
-                    <span className="mr-1">{c.dir === "up" ? "\u2191" : "\u2193"}</span>
+                  <p className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide ${c.value < 0 ? "text-red-600" : "text-emerald-700"}`}>
+                    {/* slate-800, not black: dark mode remaps that token to a
+                        light tone, where a literal black would vanish into the
+                        card. */}
+                    <span className="text-base font-extrabold leading-none text-slate-800">{c.dir === "up" ? "\u2191" : "\u2193"}</span>
                     {c.label}
                   </p>
                   <p className={`text-lg font-bold leading-tight ${c.value < 0 ? "text-red-600" : "text-emerald-600"}`}>
