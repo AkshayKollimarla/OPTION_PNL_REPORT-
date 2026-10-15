@@ -6,7 +6,9 @@ import { useCallback, useEffect, useState } from "react";
    add or delete here: a structure opened on the Options Dashboard appears,
    and one closed there leaves. Only the thresholds are yours to set. */
 
-const money = (v, places = 4) =>
+// Two decimals: these are price levels to act on, and a fifth digit of a
+// Hyperliquid mid is noise beside a dollar-wide alert.
+const money = (v, places = 2) =>
   v === null || v === undefined || v === "" || !Number.isFinite(Number(v))
     ? "—"
     : Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: places });
@@ -14,6 +16,7 @@ const money = (v, places = 4) =>
 export default function PriceAlertsPage() {
   const [rows, setRows]       = useState([]);
   const [telegram, setTg]     = useState(null);
+  const [symbols, setSymbols] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
   // Edits live here until Save, so a half-typed number never reaches the
@@ -33,6 +36,7 @@ export default function PriceAlertsPage() {
         if (j.error) throw new Error(j.error);
         setRows(j.rows || []);
         setTg(j.telegram || null);
+        setSymbols(j.symbols || []);
         setError(null);
       })
       .catch((e) => setError(e.message))
@@ -55,13 +59,18 @@ export default function PriceAlertsPage() {
   useEffect(() => {
     const sym = add.token.trim();
     if (!sym) { setProbe(null); return undefined; }
+    let current = true;
     const t = setTimeout(() => {
       fetch(`/api/price-alerts?quote=${encodeURIComponent(sym)}`, { cache: "no-store" })
         .then((r) => r.json())
-        .then((j) => setProbe(j))
-        .catch(() => setProbe(null));
+        // Dropped if the box has moved on. Typing H, HY, HYP, HYPE fires four
+        // of these, and H is Hyatt and HY is Hyster-Yale -- real tickers with
+        // real prices -- so a late answer for a half-typed symbol was
+        // overwriting the right one and reading as a flickering feed.
+        .then((j) => { if (current) setProbe(j); })
+        .catch(() => { if (current) setProbe(null); });
     }, 400);
-    return () => clearTimeout(t);
+    return () => { current = false; clearTimeout(t); };
   }, [add.token]);
 
   async function addAlert() {
@@ -105,8 +114,16 @@ export default function PriceAlertsPage() {
     const d = draft[row.key] || {};
     if (d[field] !== undefined) return d[field];
     if (field === "offset") return String(row.offset ?? 1);
-    if (field === "upper")  return row.upperManual ? String(row.upperTrigger ?? "") : "";
-    if (field === "lower")  return row.lowerManual ? String(row.lowerTrigger ?? "") : "";
+    // A manual row's boxes hold its levels, so they show what is set --
+    // blank would mean "no level", and saving would then clear it.
+    if (field === "upper") {
+      if (row.kind === "manual") return row.upper === null || row.upper === undefined ? "" : String(row.upper);
+      return row.upperManual ? String(row.upperTrigger ?? "") : "";
+    }
+    if (field === "lower") {
+      if (row.kind === "manual") return row.lower === null || row.lower === undefined ? "" : String(row.lower);
+      return row.lowerManual ? String(row.lowerTrigger ?? "") : "";
+    }
     return "";
   };
   const setField = (row, field, value) =>
@@ -123,8 +140,14 @@ export default function PriceAlertsPage() {
           key: row.key,
           offset_usd: d.offset !== undefined ? d.offset : row.offset,
           // Empty means "follow the limit", not zero.
-          alert_upper: d.upper !== undefined ? (d.upper === "" ? null : d.upper) : (row.upperManual ? row.upperTrigger : null),
-          alert_lower: d.lower !== undefined ? (d.lower === "" ? null : d.lower) : (row.lowerManual ? row.lowerTrigger : null),
+          // For a manual row these columns ARE its levels, so an untouched
+          // box sends back what is already there rather than null.
+          alert_upper: d.upper !== undefined
+            ? (d.upper === "" ? null : d.upper)
+            : (row.kind === "manual" ? row.upper : (row.upperManual ? row.upperTrigger : null)),
+          alert_lower: d.lower !== undefined
+            ? (d.lower === "" ? null : d.lower)
+            : (row.kind === "manual" ? row.lower : (row.lowerManual ? row.lowerTrigger : null)),
           enabled: d.enabled !== undefined ? d.enabled : row.enabled,
         }),
       });
@@ -182,12 +205,19 @@ export default function PriceAlertsPage() {
           <div className="mt-4 grid grid-cols-1 sm:grid-cols-5 gap-3">
             <label className="block sm:col-span-2">
               <span className="mb-1 block text-xs font-semibold text-slate-600">Symbol</span>
+              {/* Suggestions are the symbols this book has traded, read from
+                  the data -- so a coin watched for the first time suggests
+                  itself the next. A datalist still allows anything typed. */}
               <input
+                list="price-alert-symbols"
                 value={add.token}
                 onChange={(e) => setAdd((p) => ({ ...p, token: e.target.value.toUpperCase() }))}
                 placeholder="e.g. HOOD"
                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold uppercase focus:border-brand focus:outline-none"
               />
+              <datalist id="price-alert-symbols">
+                {symbols.map((sym) => <option key={sym} value={sym} />)}
+              </datalist>
             </label>
             <label className="block">
               <span className="mb-1 block text-xs font-semibold text-slate-600">Upper level</span>
@@ -273,11 +303,12 @@ export default function PriceAlertsPage() {
                     </div>
                   </div>
 
-                  {(row.priceError || row.priceMismatch) && (
+                  {(row.priceError || row.priceMismatch || !row.hasLevels) && (
                     <div className="border-b border-amber-100 bg-amber-50 px-5 py-2 text-[11px] text-amber-800">
-                      {row.priceError
-                        ? row.priceError
-                        : `The live price is far outside this strategy's band, so it is probably a different market of the same name. No alert will be sent while that is true.`}
+                      {row.priceError ? row.priceError
+                        : !row.hasLevels
+                          ? "No level set yet, so nothing is being watched. Set an upper level, a lower one, or both, then Save."
+                          : `The live price is far outside ${row.kind === "manual" ? "these levels" : "this strategy's band"}, so it is probably a different market of the same name. No alert is sent while that is true.`}
                     </div>
                   )}
 
@@ -291,29 +322,65 @@ export default function PriceAlertsPage() {
 
                   {/* The three things that are yours to set */}
                   <div className="space-y-3 px-5 py-4">
-                    <Field
-                      label="Alert this far before a limit ($)"
-                      hint="Used for whichever side you have not set outright"
-                      value={valueOf(row, "offset")}
-                      placeholder="1"
-                      onChange={(v) => setField(row, "offset", v)}
-                    />
-                    <div className="grid grid-cols-2 gap-3">
-                      <Field
-                        label="Alert at (upper)"
-                        hint={row.upperManual ? "your value" : "auto"}
-                        value={valueOf(row, "upper")}
-                        placeholder={row.upperTrigger != null ? String(row.upperTrigger) : ""}
-                        onChange={(v) => setField(row, "upper", v)}
-                      />
-                      <Field
-                        label="Alert at (lower)"
-                        hint={row.lowerManual ? "your value" : "auto"}
-                        value={valueOf(row, "lower")}
-                        placeholder={row.lowerTrigger != null ? String(row.lowerTrigger) : ""}
-                        onChange={(v) => setField(row, "lower", v)}
-                      />
-                    </div>
+                    {/* A manual alert's levels ARE its limits, so the card
+                        edits them directly. It used to show the same override
+                        pair a strategy card does, which writes to the very
+                        columns holding those levels -- pressing Save with the
+                        boxes empty wiped them, which is how a HYPE alert ended
+                        up watching nothing. */}
+                    {row.kind === "manual" ? (
+                      <>
+                        <div className="grid grid-cols-2 gap-3">
+                          <Field
+                            label="Upper level"
+                            hint="blank watches only below"
+                            value={valueOf(row, "upper")}
+                            placeholder="optional"
+                            onChange={(v) => setField(row, "upper", v)}
+                          />
+                          <Field
+                            label="Lower level"
+                            hint="blank watches only above"
+                            value={valueOf(row, "lower")}
+                            placeholder="optional"
+                            onChange={(v) => setField(row, "lower", v)}
+                          />
+                        </div>
+                        <Field
+                          label="Alert this far before a level ($)"
+                          hint="0 alerts exactly at the level"
+                          value={valueOf(row, "offset")}
+                          placeholder="1"
+                          onChange={(v) => setField(row, "offset", v)}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <Field
+                          label="Alert this far before a limit ($)"
+                          hint="Used for whichever side you have not set outright"
+                          value={valueOf(row, "offset")}
+                          placeholder="1"
+                          onChange={(v) => setField(row, "offset", v)}
+                        />
+                        <div className="grid grid-cols-2 gap-3">
+                          <Field
+                            label="Alert at (upper)"
+                            hint={row.upperManual ? "your value" : "auto"}
+                            value={valueOf(row, "upper")}
+                            placeholder={row.upperTrigger != null ? money(row.upperTrigger) : ""}
+                            onChange={(v) => setField(row, "upper", v)}
+                          />
+                          <Field
+                            label="Alert at (lower)"
+                            hint={row.lowerManual ? "your value" : "auto"}
+                            value={valueOf(row, "lower")}
+                            placeholder={row.lowerTrigger != null ? money(row.lowerTrigger) : ""}
+                            onChange={(v) => setField(row, "lower", v)}
+                          />
+                        </div>
+                      </>
+                    )}
 
                     <div className="flex items-center justify-between pt-1">
                       <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
