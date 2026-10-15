@@ -329,7 +329,18 @@ export default function PriceAlertsPage() {
                         boxes empty wiped them, which is how a HYPE alert ended
                         up watching nothing. */}
                     {row.kind === "manual" ? (
+                      /* Same order as a strategy card: the distance first,
+                         then the pair of levels side by side. The two kinds
+                         sit next to each other on this page, and reading one
+                         should not mean re-finding the fields in the other. */
                       <>
+                        <Field
+                          label="Alert this far before a level ($)"
+                          hint="0 alerts exactly at the level"
+                          value={valueOf(row, "offset")}
+                          placeholder="1"
+                          onChange={(v) => setField(row, "offset", v)}
+                        />
                         <div className="grid grid-cols-2 gap-3">
                           <Field
                             label="Upper level"
@@ -346,13 +357,6 @@ export default function PriceAlertsPage() {
                             onChange={(v) => setField(row, "lower", v)}
                           />
                         </div>
-                        <Field
-                          label="Alert this far before a level ($)"
-                          hint="0 alerts exactly at the level"
-                          value={valueOf(row, "offset")}
-                          placeholder="1"
-                          onChange={(v) => setField(row, "offset", v)}
-                        />
                       </>
                     ) : (
                       <>
