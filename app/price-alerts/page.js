@@ -87,7 +87,12 @@ export default function PriceAlertsPage() {
   }
 
   async function removeAlert(row) {
-    if (!window.confirm(`Stop watching ${row.coin}?`)) return;
+    // Worded for what it does: a manual alert disappears, a strategy's does
+    // not -- it goes back to the levels its own limits imply.
+    const question = row.kind === "manual"
+      ? `Stop watching ${row.coin}? This removes the alert.`
+      : `Clear the saved levels for ${row.coin}? Its alerts go back to following its limits.`;
+    if (!window.confirm(question)) return;
     try {
       const res = await fetch(`/api/price-alerts?key=${encodeURIComponent(row.key)}`, { method: "DELETE" });
       const j = await res.json();
@@ -320,13 +325,11 @@ export default function PriceAlertsPage() {
                         />
                         Alerts on
                       </label>
-                      {row.kind === "manual" && (
-                        <button
-                          onClick={() => removeAlert(row)}
-                          className="text-xs font-semibold text-slate-400 hover:text-red-600">
-                          Remove
-                        </button>
-                      )}
+                      <button
+                        onClick={() => removeAlert(row)}
+                        className="text-xs font-semibold text-slate-400 hover:text-red-600">
+                        {row.kind === "manual" ? "Delete alert" : "Clear saved levels"}
+                      </button>
                       <div className="flex items-center gap-3">
                         {saved === row.key && <span className="text-xs font-semibold text-emerald-600">Saved</span>}
                         {row.lastFiredAt && saved !== row.key && (

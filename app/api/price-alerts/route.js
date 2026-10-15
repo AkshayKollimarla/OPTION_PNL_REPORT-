@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { buildRows, quoteSymbol } from "../../../lib/price-alert-rows";
 import {
-  ensureAlertTable, saveSettings, addManual, removeManual,
+  ensureAlertTable, saveSettings, addManual, removeManual, forgetSettings,
 } from "../../../lib/price-alert-store";
 
 export const dynamic = "force-dynamic";
@@ -64,8 +64,12 @@ export async function PUT(request) {
 }
 
 /**
- * Remove a manual alert. A strategy's row belongs to its strategy and leaves
- * when that closes, so there is nothing to delete here.
+ * Delete what was saved.
+ *
+ * A manual alert goes altogether -- it exists only because it was added. A
+ * strategy's row cannot: it is the strategy, and it leaves when that closes.
+ * Deleting one there drops the thresholds that were saved for it, so it goes
+ * back to following its own limits.
  */
 export async function DELETE(request) {
   const { searchParams } = new URL(request.url);
@@ -73,8 +77,12 @@ export async function DELETE(request) {
   if (!key) return NextResponse.json({ error: "A key is required." }, { status: 400 });
   try {
     await ensureAlertTable();
-    await removeManual(key);
-    return NextResponse.json({ ok: true });
+    if (key.startsWith("m:")) {
+      await removeManual(key);
+      return NextResponse.json({ ok: true, removed: "alert" });
+    }
+    const n = await forgetSettings(key);
+    return NextResponse.json({ ok: true, removed: n ? "settings" : "nothing" });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 400 });
   }
