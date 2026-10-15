@@ -21,6 +21,7 @@ const optionsNav = [
   { href: "/options/simulator",  label: "Combined Simulator",  icon: SimulatorIcon  },
   { href: "/options/analysis",   label: "Strategy Analysis",   icon: ChartIcon      },
   { href: "/options/summary",    label: "Options Summary",     icon: ChartIcon      },
+  { href: "/price-alerts",       label: "Price Alerts",        icon: BellIcon       },
   { href: "/accounts",           label: "Accounts",            icon: AccountsIcon   },
 ];
 
@@ -190,6 +191,15 @@ function LogoutIcon({ className }) {
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" strokeLinecap="round" />
       <polyline points="16 17 21 12 16 7" strokeLinecap="round" strokeLinejoin="round" />
       <line x1="21" y1="12" x2="9" y2="12" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function BellIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M13.73 21a2 2 0 0 1-3.46 0" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
