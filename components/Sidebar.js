@@ -17,6 +17,7 @@ const optionsNav = [
   { href: "/options",            label: "Options Dashboard",   icon: OptionsIcon    },
   { href: "/options/monitor",    label: "Monitor",             icon: MonitorIcon    },
   { href: "/options/exit",       label: "Options Exit",        icon: ExitIcon       },
+  { href: "/positions",          label: "Positions",           icon: PositionsIcon  },
   { href: "/options/add",        label: "Add Strategy",        icon: PlusIcon       },
   { href: "/options/simulator",  label: "Combined Simulator",  icon: SimulatorIcon  },
   { href: "/options/analysis",   label: "Strategy Analysis",   icon: ChartIcon      },
@@ -200,6 +201,17 @@ function BellIcon({ className }) {
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M13.73 21a2 2 0 0 1-3.46 0" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function PositionsIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M3 3v18h18" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="7" y="12" width="3" height="6" rx="0.5" />
+      <rect x="12" y="8" width="3" height="10" rx="0.5" />
+      <rect x="17" y="5" width="3" height="13" rx="0.5" />
     </svg>
   );
 }
