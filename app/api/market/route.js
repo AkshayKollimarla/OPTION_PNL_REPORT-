@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import pool from "../../../lib/options-db";
+import { hip3Price, HIP3_DEX } from "../../../lib/price-feed";
 import {
   resolveProvider,
   parseInstrument,
@@ -184,8 +185,29 @@ export async function GET(request) {
       if (action === "futures") {
         // A US-equity strategy has no futures leg. The instrument the caller
         // composed (TOKEN-PERPETUAL) has no meaning here, so it is ignored and
-        // the underlying share price answers instead — which is what
+        // the underlying price answers instead — which is what
         // fut_entry_price holds for these strategies.
+        //
+        // Hyperliquid's HIP-3 xyz dex is asked first: it runs a perp on each of
+        // these names and quotes it in real time, where the free Alpaca stock
+        // feed is fifteen minutes behind. Alpaca remains the fallback for a
+        // name that dex does not list.
+        const hip3 = await hip3Price(token).catch(() => null);
+        if (hip3 > 0) {
+          return NextResponse.json({
+            mark_price:  hip3,
+            index_price: hip3,
+            instrument:  `${HIP3_DEX}:${String(token).toUpperCase()}`,
+            best_bid:    null,
+            best_ask:    null,
+            mid_price:   hip3,
+            feed:            `hyperliquid ${HIP3_DEX}`,
+            quote_at:        new Date().toISOString(),
+            delayed_minutes: 0,
+            exact_price: true,
+          });
+        }
+
         const u = await alpacaUnderlying(token, apiKey, apiSecret).catch(() => null);
         if (!u || !(u.mid > 0)) {
           return NextResponse.json(
