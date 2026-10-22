@@ -117,6 +117,10 @@ body {
 .dark .border-slate-100 { border-color: #1f2a40; }
 .dark .border-slate-200 { border-color: var(--border); }
 .dark .border-slate-300 { border-color: #33415c; }
+/* The simulator leg cards are outlined in black on the light theme.
+   Left as slate-900 in the dark theme that is a black line on a
+   near-black card, which is no outline at all. */
+.dark .border-slate-900 { border-color: #5b6b85; }
 .dark .divide-slate-50 > :not([hidden]) ~ :not([hidden]) { border-color: #1a2338; }
 .dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) { border-color: #1f2a40; }
 

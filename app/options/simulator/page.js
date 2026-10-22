@@ -2231,7 +2231,7 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
   const hasLiveData   = liveExpiries.length > 0;
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+    <div className="rounded-xl border border-slate-900 bg-white shadow-sm overflow-hidden">
       <div className="flex items-center gap-3 px-5 py-3.5 border-b border-slate-100 bg-slate-50 flex-wrap">
         <span className="text-sm font-bold text-slate-600">{label}</span>
         <div className={`flex items-center gap-1.5 rounded-full border px-3 py-1 ${style.badge}`}>
