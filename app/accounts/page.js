@@ -4,6 +4,31 @@ import { useState, useEffect } from "react";
 
 const EXCHANGES = ["deribit", "hyperliquid", "alpaca", "binance", "bybit", "okx", "other"];
 
+/**
+ * What each venue actually needs, so the form asks for that and nothing else.
+ *
+ * A wallet venue is identified by an address and signs with a private key; an
+ * exchange issues a key and a secret. Showing all three at once meant every
+ * account had a box on it that did not apply, and the one that did apply was
+ * labelled for somebody else.
+ *
+ * The secret goes in a different column for the two kinds, which is why this
+ * map names it: private_key is the column kept for wallet keys, api_secret is
+ * the one every exchange client here already reads.
+ */
+const CREDENTIAL_FIELDS = {
+  hyperliquid: [
+    { name: "api_key", label: "Wallet Address", placeholder: "0x…", type: "text" },
+    { name: "private_key", label: "Secret Key", placeholder: "0x… wallet private key", type: "password" },
+  ],
+  default: [
+    { name: "api_key", label: "API Key / Client ID", placeholder: "Public key or client_id", type: "text" },
+    { name: "api_secret", label: "API Secret / Client Secret", placeholder: "Secret key or client_secret", type: "password" },
+  ],
+};
+
+const fieldsFor = (exchange) => CREDENTIAL_FIELDS[exchange] || CREDENTIAL_FIELDS.default;
+
 const EMPTY = {
   name: "", exchange: "deribit", api_key: "", api_secret: "", private_key: "", testnet: false,
 };
@@ -48,6 +73,22 @@ export default function AccountsPage() {
   }
 
   useEffect(() => { load(); }, []);
+
+  // Switching venue clears the credentials that no longer apply, so a secret
+  // typed into one venue's box cannot be saved under another venue's column
+  // -- where nothing would ever read it, and it would sit in the database
+  // regardless.
+  function handleExchangeChange(e) {
+    const exchange = e.target.value;
+    const keep = new Set(fieldsFor(exchange).map((f) => f.name));
+    setForm((prev) => ({
+      ...prev,
+      exchange,
+      api_key: keep.has("api_key") ? prev.api_key : "",
+      api_secret: keep.has("api_secret") ? prev.api_secret : "",
+      private_key: keep.has("private_key") ? prev.private_key : "",
+    }));
+  }
 
   function handleChange(e) {
     const { name, value, type, checked } = e.target;
@@ -131,7 +172,7 @@ export default function AccountsPage() {
               <select
                 name="exchange"
                 value={form.exchange}
-                onChange={handleChange}
+                onChange={handleExchangeChange}
                 className={inp}
               >
                 {EXCHANGES.map(ex => (
@@ -141,14 +182,17 @@ export default function AccountsPage() {
             </div>
           </div>
 
-          <Field label="API Key / Client ID" name="api_key" value={form.api_key}
-            onChange={handleChange} placeholder="Public key or client_id" />
-
-          <Field label="API Secret / Client Secret" name="api_secret" type="password"
-            value={form.api_secret} onChange={handleChange} placeholder="Secret key or client_secret" />
-
-          <Field label="Private Key (Hyperliquid / wallet keys only)" name="private_key" type="password"
-            value={form.private_key} onChange={handleChange} placeholder="0x… wallet private key (if required)" />
+          {fieldsFor(form.exchange).map((f) => (
+            <Field
+              key={f.name}
+              label={f.label}
+              name={f.name}
+              type={f.type}
+              value={form[f.name]}
+              onChange={handleChange}
+              placeholder={f.placeholder}
+            />
+          ))}
 
           <div className="flex items-center gap-3">
             <input
