@@ -156,7 +156,7 @@ function ManualEntryInner() {
 
   return (
     <div>
-      <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-6">
+      <header className="flex min-h-[4rem] flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3 sm:h-16 sm:flex-nowrap sm:py-0 border-b border-slate-200 bg-white px-4 sm:px-6">
         <div>
           <h1 className="text-lg font-bold text-slate-800">Manual Entry</h1>
           {sourceId && (
@@ -173,9 +173,9 @@ function ManualEntryInner() {
       </header>
 
       {loadingFrom ? (
-        <div className="p-6 text-sm text-slate-400">Loading entry data…</div>
+        <div className="p-4 sm:p-6 text-sm text-slate-400">Loading entry data…</div>
       ) : (
-        <form onSubmit={onSubmit} className="p-6 space-y-6">
+        <form onSubmit={onSubmit} className="p-4 sm:p-6 space-y-6">
           <p className="text-sm text-slate-500">
             {sourceId
               ? "Fields are pre-filled from a previous entry. Change what you need, then save — this will create a new log entry."
@@ -300,7 +300,7 @@ function ManualEntryInner() {
 
 export default function ManualEntry() {
   return (
-    <Suspense fallback={<div className="p-6 text-sm text-slate-400">Loading…</div>}>
+    <Suspense fallback={<div className="p-4 sm:p-6 text-sm text-slate-400">Loading…</div>}>
       <ManualEntryInner />
     </Suspense>
   );

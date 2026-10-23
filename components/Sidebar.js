@@ -26,7 +26,7 @@ const optionsNav = [
   { href: "/accounts",           label: "Accounts",            icon: AccountsIcon   },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ onNavigate }) {
   const pathname = usePathname();
   const router   = useRouter();
 
@@ -37,10 +37,21 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="w-60 shrink-0 bg-navy text-slate-300 flex flex-col">
+    <aside className="w-60 shrink-0 bg-navy text-slate-300 flex flex-col h-full">
       <div className="flex items-center gap-2 px-5 h-16 border-b border-white/10">
         <Logo className="h-9 w-9 shrink-0" />
         <span className="text-white font-semibold tracking-wide text-sm">STRING TRADING</span>
+        {/* Only in the drawer: on a wide screen the sidebar never closes. */}
+        {onNavigate && (
+          <button
+            onClick={onNavigate}
+            aria-label="Close navigation"
+            className="ml-auto grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-white/10 hover:text-white lg:hidden">
+            <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">

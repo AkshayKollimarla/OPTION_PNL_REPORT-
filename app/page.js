@@ -194,7 +194,7 @@ export default function Dashboard() {
     <div>
       <Header />
 
-      <div className="p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-6">
         {error && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
@@ -393,7 +393,7 @@ export default function Dashboard() {
 
 function Header() {
   return (
-    <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-6">
+    <header className="flex min-h-[4rem] flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3 sm:h-16 sm:flex-nowrap sm:py-0 border-b border-slate-200 bg-white px-4 sm:px-6">
       <h1 className="text-lg font-bold text-slate-800">String Trading</h1>
       <div className="flex items-center gap-4 text-slate-500">
         <span>🔔</span>

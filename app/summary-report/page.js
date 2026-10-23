@@ -99,7 +99,7 @@ export default function SummaryReport() {
         <h1 className="text-xl font-bold text-slate-800">Summary Report</h1>
       </header>
 
-      <div className="p-6 space-y-5">
+      <div className="p-4 sm:p-6 space-y-5">
         {error && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
         )}

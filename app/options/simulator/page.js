@@ -1689,7 +1689,7 @@ function SimulatorInner() {
         <div className="mx-6 mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{loadErr}</div>
       )}
 
-      <div className="p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-6">
         {/* ── Leg cards ──
             Leg 1 carries the whole structure and keeps every field; the rest
             are compact and stack beside it. Two independent columns rather
@@ -1969,7 +1969,7 @@ function SimulatorInner() {
 
 export default function CombinedSimulator() {
   return (
-    <Suspense fallback={<div className="p-6 text-sm text-slate-400">Loading…</div>}>
+    <Suspense fallback={<div className="p-4 sm:p-6 text-sm text-slate-400">Loading…</div>}>
       <SimulatorInner />
     </Suspense>
   );

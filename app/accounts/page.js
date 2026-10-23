@@ -146,7 +146,7 @@ export default function AccountsPage() {
   }
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-3xl mx-auto space-y-6">
 
       {/* Header */}
       <header className="flex h-16 items-center border-b border-slate-200">

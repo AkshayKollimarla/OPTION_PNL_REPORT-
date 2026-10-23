@@ -63,7 +63,7 @@ function AnalysisInner() {
         <h1 className="text-lg font-bold text-slate-800">Analysis</h1>
       </header>
 
-      <div className="p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-6">
 
         {/* Filter bar */}
         <div className="rounded-xl border border-slate-100 bg-white p-4 shadow-card">
@@ -315,7 +315,7 @@ function formatDatetime(dt) {
 // client-side rendering and the server sends an empty shell.
 export default function Analysis() {
   return (
-    <Suspense fallback={<div className="p-6 text-sm text-slate-400">Loading…</div>}>
+    <Suspense fallback={<div className="p-4 sm:p-6 text-sm text-slate-400">Loading…</div>}>
       <AnalysisInner />
     </Suspense>
   );

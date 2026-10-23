@@ -141,7 +141,7 @@ export default function OptionsExitPage() {
         <h1 className="text-lg font-bold text-slate-800">Options Exit</h1>
       </header>
 
-      <div className="p-6 space-y-4">
+      <div className="p-4 sm:p-6 space-y-4">
         {loading && <p className="text-sm text-slate-500">Loading open strategies…</p>}
         {error && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>

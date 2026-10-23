@@ -68,7 +68,7 @@ export default function PositionsPage() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-6">
+      <header className="flex min-h-[4rem] flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3 sm:h-16 sm:flex-nowrap sm:py-0 border-b border-slate-200 bg-white px-4 sm:px-6">
         <div>
           <h1 className="text-lg font-bold text-slate-800">Positions</h1>
           <p className="text-xs text-slate-400">Live from the venue · refreshes every 15 seconds</p>
@@ -89,7 +89,7 @@ export default function PositionsPage() {
         </div>
       </header>
 
-      <div className="p-6 space-y-4">
+      <div className="p-4 sm:p-6 space-y-4">
         {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
         {/* One venue failing must not read as "no positions". */}

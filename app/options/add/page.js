@@ -1175,7 +1175,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
   // ── Render ────────────────────────────────────────────────
   return (
     <div>
-      <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-6">
+      <header className="flex min-h-[4rem] flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3 sm:h-16 sm:flex-nowrap sm:py-0 border-b border-slate-200 bg-white px-4 sm:px-6">
         <div>
           <h1 className="text-lg font-bold text-slate-800">{isEdit ? "Edit / Close Strategy" : "Add Options Strategy"}</h1>
           {isEdit && <p className="text-xs text-slate-400 mt-0.5">Strategy #{tradeId}</p>}
@@ -1183,7 +1183,7 @@ export default function AddStrategy({ initialData, tradeId, isEdit }) {
         <button onClick={() => router.back()} className="text-sm text-slate-500 hover:text-slate-700">← Back</button>
       </header>
 
-      <div className="p-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
+      <div className="p-4 sm:p-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* LEFT: input form */}
         <form onSubmit={onSubmit} className="xl:col-span-2 space-y-6">
           {error   && <Alert type="error">{error}</Alert>}
