@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { fetchLegMids } from "../../../../lib/live-legs";
+import { fetchStrategyQuotes } from "../../../../lib/live-legs";
 
 export const dynamic = "force-dynamic";
 
@@ -15,12 +15,12 @@ export async function POST(request) {
   try { body = await request.json(); }
   catch { return NextResponse.json({ error: "Invalid JSON." }, { status: 400 }); }
 
-  const { account_id, legs } = body || {};
+  const { account_id, legs, fut_token } = body || {};
   if (!account_id) return NextResponse.json({ error: "An account is required." }, { status: 400 });
 
   try {
-    const { mids, venue } = await fetchLegMids(account_id, legs);
-    return NextResponse.json({ mids, venue });
+    const q = await fetchStrategyQuotes(account_id, legs, fut_token);
+    return NextResponse.json(q);
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 200 });
   }

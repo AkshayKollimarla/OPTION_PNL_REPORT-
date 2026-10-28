@@ -7,7 +7,7 @@ import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
 import TokenSelect from "../../../components/TokenSelect";
 import { chainReloadAction, usMarketToday } from "../../../lib/chain-reload";
 import { DISTANCE_KEYS, distanceDecision } from "../../../lib/leg-distance";
-import { spreadPrices, livePnl } from "../../../lib/spread-price";
+import { spreadPrices, livePnl, futuresPnl } from "../../../lib/spread-price";
 import { legKey } from "../../../lib/leg-key";
 
 const RISK_FREE = 0.05;
@@ -551,11 +551,16 @@ function SimulatorInner() {
 
   // What each side of the structure cost to open -- long premium less short
   // premium. See lib/spread-price.js.
+  // Two figures added, each already rounded: without this the sum carries a
+  // binary tail the parts do not show.
+  const exactMoney = (v) => Math.round(v * 1e6) / 1e6;
+
   const spreads = useMemo(() => spreadPrices(legs), [legs]);
 
   // Live mids for every leg, refreshed on a timer, so an OPEN structure shows
   // what it is worth now rather than what it was worth when it was entered.
   const [liveMids, setLiveMids] = useState(null);
+  const [liveFut, setLiveFut] = useState(null);
   const [liveAt, setLiveAt] = useState(null);
   const [liveErr, setLiveErr] = useState(null);
 
@@ -570,6 +575,11 @@ function SimulatorInner() {
       optType: (l.form.option_type || (l.type || "").split(" ")[0] || "CALL").toUpperCase(),
     }))
     .filter((l) => l.token && l.expiry && l.strike > 0), [legs]);
+
+  // The coin behind the hedge. In a ref so changing it does not restart the
+  // polling effect -- the token is already part of liveLegsKey, which does.
+  const futTokenRef = useRef(null);
+  futTokenRef.current = legs[0]?.form?.token || null;
 
   const canPoll = isEditMode && isOpen && !!selectedAcct && liveLegs.length >= 2;
   // Serialised so the effect restarts only when the contracts themselves
@@ -588,15 +598,21 @@ function SimulatorInner() {
         const res = await fetch("/api/options/live-legs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ account_id: selectedAcct, legs: JSON.parse(liveLegsKey) }),
+          body: JSON.stringify({
+            account_id: selectedAcct,
+            legs: JSON.parse(liveLegsKey),
+            // The underlying the hedge is against, priced in the same call.
+            fut_token: futTokenRef.current,
+          }),
           cache: "no-store",
         });
         const j = await res.json();
         if (stopped) return;
         if (j.error) { setLiveErr(j.error); return; }
         setLiveMids(j.mids || {});
+        setLiveFut(j.fut?.price ?? null);
         setLiveAt(new Date());
-        setLiveErr(null);
+        setLiveErr(j.legError || j.futError || null);
       } catch (e) {
         if (!stopped) setLiveErr(e.message);
       }
@@ -621,8 +637,16 @@ function SimulatorInner() {
       });
       return liveMids[k]?.mid ?? null;
     };
-    return livePnl(legs, midOf);
-  }, [legs, liveMids]);
+    const opt = livePnl(legs, midOf);
+    const fut = futuresPnl(legs, liveFut);
+    return {
+      ...opt,
+      fut,
+      // The strategy as a whole: both halves, and only when at least one of
+      // them has something to say.
+      total: opt.net !== null || fut ? exactMoney((opt.net || 0) + (fut?.pnl || 0)) : null,
+    };
+  }, [legs, liveMids, liveFut]);
 
   // Re-link a leg to the first card's value after it was overridden.
   function relinkLegField(idx, key) {
@@ -1858,13 +1882,16 @@ function SimulatorInner() {
                   </p>
                 </div>
               ))}
-              {/* Live, for an open structure: what each spread has made since
-                  it was put on. Blank until every leg of a side has a
-                  two-sided quote -- a half-priced spread is not a figure. */}
-              {canPoll && (live?.call || live?.put) && [
+              {/* Live, for an open structure: what each spread and the hedge
+                  have made since they were put on, and the strategy's net --
+                  options plus futures, which is the only net worth a card.
+                  Blank until every leg of a side has a two-sided quote: a
+                  half-priced spread is not a figure. */}
+              {canPoll && (live?.call || live?.put || live?.fut) && [
                 { label: "Call PNL", value: live.call?.pnl, part: live.call },
                 { label: "Put PNL", value: live.put?.pnl, part: live.put },
-                { label: "Net Option PNL", value: live.net, part: null, strong: true },
+                { label: "Futures PNL", value: live.fut?.pnl, part: live.fut ? { live: live.fut.live, entry: null, qty: live.fut.qty } : null },
+                { label: "Net PNL", value: live.total, part: null, strong: true },
               ].map((c) => (
                 <div key={c.label}
                   className={`rounded-lg border px-4 py-2.5 ${c.value == null ? "border-slate-200 bg-slate-50"
@@ -1883,7 +1910,9 @@ function SimulatorInner() {
                   </p>
                   {c.part && (
                     <p className="text-[10px] text-slate-400">
-                      {fmtOpt(c.part.live)} now vs {fmtOpt(c.part.entry)} in &times; {c.part.qty}
+                      {c.part.entry === null
+                        ? <>underlying {fmtOpt(c.part.live)} &times; {c.part.qty}</>
+                        : <>{fmtOpt(c.part.live)} now vs {fmtOpt(c.part.entry)} in &times; {c.part.qty}</>}
                     </p>
                   )}
                   {c.strong && liveAt && (
