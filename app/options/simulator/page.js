@@ -551,6 +551,23 @@ function SimulatorInner() {
 
   // What each side of the structure cost to open -- long premium less short
   // premium. See lib/spread-price.js.
+  // A price, not a sum of money: the sign goes outside the $ so a credit
+  // spread reads -$3.175 rather than $-3.175.
+  const px = (v) => {
+    const n = Number(v);
+    if (v === null || v === undefined || v === "" || !Number.isFinite(n)) return "—";
+    return (n < 0 ? "-" : "") + fmtOpt(Math.abs(n));
+  };
+
+  // The price the hedge was put on at, when every leg carrying one agrees.
+  // They normally do, since the later cards follow the first; where a leg was
+  // overridden by hand there is no single entry to show.
+  const futEntryShown = (() => {
+    const ps = legs.filter((l) => Number(l.form.fut_qty) !== 0)
+      .map((l) => Number(l.form.fut_entry_price)).filter((n) => Number.isFinite(n) && n > 0);
+    return ps.length && ps.every((p) => p === ps[0]) ? ps[0] : null;
+  })();
+
   // Two figures added, each already rounded: without this the sum carries a
   // binary tail the parts do not show.
   const exactMoney = (v) => Math.round(v * 1e6) / 1e6;
@@ -756,23 +773,6 @@ function SimulatorInner() {
   const bsLabel = bsDaysFwd <= 0 ? "Today BS"
     : bsDaysFwd >= maxDte ? "Expiry BS"
     : `Day ${bsDaysFwd + 1} BS`;
-
-  // The cards move with the scenario slider, so they have to say which day
-  // they are showing -- "Today" over a figure projected five days out would
-  // be worse than not moving at all.
-  const scenarioWord = bsDaysFwd <= 0 ? "Today"
-    : bsDaysFwd >= maxDte ? "Expiry Day"
-    : `Day ${bsDaysFwd + 1}`;
-
-  // The calendar date behind that word: the day the structure is valued from
-  // (today, or the entry date for a closed one) rolled forward by the slider.
-  const scenarioDate = (() => {
-    const base = legs.length ? valuationDate(legs[0].form) : new Date();
-    const d = new Date(base);
-    d.setDate(d.getDate() + Math.max(0, bsDaysFwd));
-    const p = (n) => String(n).padStart(2, "0");
-    return `${p(d.getDate())}-${p(d.getMonth() + 1)}-${d.getFullYear()}`;
-  })();
 
   const bsUpsideCombined = legs.reduce((s, l) => {
     const S   = parseFloat(l.form.fut_entry_price) || 0;
@@ -1928,47 +1928,38 @@ function SimulatorInner() {
                 </div>
               )}
 
-              {/* What the structure makes at expiry and what it is worth as it
-                  stands, each way the underlying can go. The Expiry figures are
-                  payoffs and carry no time value; the Today ones are priced
-                  with whatever time is left, which is why a strategy whose
-                  expiry has passed reads the same in both. */}
-              {[
-                { label: "Upside Expiry PNL",   value: upside.net, dir: "up" },
-                // The whole structure, not its options half: the futures leg
-                // and any MM loss count the same way they do in the scenario
-                // block below, which totals bsToday + fut + mm. Shipped with
-                // the options figure alone, this card read -225 against the
-                // block's 975 for the same position.
-                { label: `${scenarioWord} Upside PNL`,   value: bsUpsideCombined + upside.fut + upside.mm, dir: "up", asOf: true },
-                { label: "Downside Expiry PNL", value: downside.net, dir: "down" },
-                { label: `${scenarioWord} Downside PNL`, value: bsDownsideCombined + downside.fut + downside.mm, dir: "down", asOf: true },
+              {/* The prices the live figures above are worked out from: each
+                  spread as it stands now, and the underlying. Quotes, not
+                  profits, so they are not coloured by sign -- a call spread
+                  sold for a credit is a negative number and nothing is wrong
+                  with it. */}
+              {canPoll && [
+                { label: "Live Call Spread", value: live?.call?.live, sub: live?.call ? `entry ${px(live.call.entry)}` : null },
+                { label: "Live Put Spread",  value: live?.put?.live,  sub: live?.put ? `entry ${px(live.put.entry)}` : null },
+                { label: "Futures Live Price", value: liveFut,
+                  sub: [legs[0]?.form.token, futEntryShown != null ? `entry ${px(futEntryShown)}` : null].filter(Boolean).join(" · ") || null },
               ].map((c) => (
-                <div key={c.label}
-                  className={`rounded-lg border px-4 py-2.5 ${c.value < 0 ? "border-red-100 bg-red-50/60" : "border-emerald-100 bg-emerald-50/60"}`}>
-                  <p className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide ${c.value < 0 ? "text-red-600" : "text-emerald-700"}`}>
-                    {/* slate-800, not black: dark mode remaps that token to a
-                        light tone, where a literal black would vanish into the
-                        card. */}
-                    <span className="text-base font-extrabold leading-none text-slate-800">{c.dir === "up" ? "\u2191" : "\u2193"}</span>
+                <div key={c.label} className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5">
+                  <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    <span className="relative flex h-2 w-2">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                    </span>
                     {c.label}
                   </p>
-                  <p className={`text-lg font-bold leading-tight ${c.value < 0 ? "text-red-600" : "text-emerald-600"}`}>
-                    {fmtCcy(c.value)}
+                  <p className={`text-lg font-bold leading-tight ${c.value == null ? "text-slate-400" : "text-slate-800"}`}>
+                    {px(c.value)}
                   </p>
-                  {/* The day being priced, whenever that is not plainly today:
-                      a closed strategy is valued from the day it was put on,
-                      and the slider moves either kind forward. */}
-                  {c.asOf && (valuedAtEntry || bsDaysFwd > 0) && (
-                    <p className="text-[10px] text-slate-400">as at {scenarioDate}</p>
-                  )}
+                  {c.sub && <p className="text-[10px] text-slate-400">{c.sub}</p>}
                 </div>
               ))}
             </div>
 
           {/* Scenario clock. Only the Black-Scholes rows move with it — the
-              "Net ... Pnl Expiry" figures above are expiry payoffs and have no time
-              value to decay, so they are unaffected by design. */}
+              "Net ... Pnl Expiry" figures in the blocks below are expiry
+              payoffs and have no time value to decay, so they are unaffected
+              by design. The live cards above do not move with it either: they
+              are quotes, and a quote has no future day. */}
           <div className="mb-4 rounded-lg border border-indigo-100 bg-indigo-50/60 px-4 py-3">
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Scenario day</span>
