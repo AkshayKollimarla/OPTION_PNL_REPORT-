@@ -7,7 +7,8 @@ import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
 import TokenSelect from "../../../components/TokenSelect";
 import { chainReloadAction, usMarketToday } from "../../../lib/chain-reload";
 import { DISTANCE_KEYS, distanceDecision } from "../../../lib/leg-distance";
-import { spreadPrices } from "../../../lib/spread-price";
+import { spreadPrices, livePnl } from "../../../lib/spread-price";
+import { legKey } from "../../../lib/leg-key";
 
 const RISK_FREE = 0.05;
 
@@ -551,6 +552,77 @@ function SimulatorInner() {
   // What each side of the structure cost to open -- long premium less short
   // premium. See lib/spread-price.js.
   const spreads = useMemo(() => spreadPrices(legs), [legs]);
+
+  // Live mids for every leg, refreshed on a timer, so an OPEN structure shows
+  // what it is worth now rather than what it was worth when it was entered.
+  const [liveMids, setLiveMids] = useState(null);
+  const [liveAt, setLiveAt] = useState(null);
+  const [liveErr, setLiveErr] = useState(null);
+
+  // Only while something is actually open: a closed structure has no live
+  // value, and a half-built one has no contracts to ask about.
+  const isOpen = legs.some((l) => String(l.form.status || "open").toLowerCase() === "open");
+  const liveLegs = useMemo(() => legs
+    .map((l) => ({
+      token: l.form.token,
+      expiry: l.form.expiry,
+      strike: strikeNumber(l.form.options_strike),
+      optType: (l.form.option_type || (l.type || "").split(" ")[0] || "CALL").toUpperCase(),
+    }))
+    .filter((l) => l.token && l.expiry && l.strike > 0), [legs]);
+
+  const canPoll = isEditMode && isOpen && !!selectedAcct && liveLegs.length >= 2;
+  // Serialised so the effect restarts only when the contracts themselves
+  // change, not on every keystroke that leaves them alone.
+  const liveLegsKey = JSON.stringify(liveLegs);
+
+  useEffect(() => {
+    if (!canPoll) { setLiveMids(null); setLiveErr(null); return undefined; }
+    let stopped = false;
+
+    const poll = async () => {
+      // Nothing to look at, nothing to ask for. A background tab polling a
+      // venue every two seconds is load nobody is reading.
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const res = await fetch("/api/options/live-legs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ account_id: selectedAcct, legs: JSON.parse(liveLegsKey) }),
+          cache: "no-store",
+        });
+        const j = await res.json();
+        if (stopped) return;
+        if (j.error) { setLiveErr(j.error); return; }
+        setLiveMids(j.mids || {});
+        setLiveAt(new Date());
+        setLiveErr(null);
+      } catch (e) {
+        if (!stopped) setLiveErr(e.message);
+      }
+    };
+
+    poll();
+    const t = setInterval(poll, 2000);
+    return () => { stopped = true; clearInterval(t); };
+  }, [canPoll, selectedAcct, liveLegsKey]);
+
+  // The figures the cards show: (live spread - entry spread) x quantity, per
+  // side, and the two added.
+  const live = useMemo(() => {
+    if (!liveMids) return null;
+    const midOf = (leg) => {
+      if (!leg) return null;
+      const k = legKey({
+        token: leg.form.token,
+        expiry: leg.form.expiry,
+        strike: strikeNumber(leg.form.options_strike),
+        optType: (leg.form.option_type || (leg.type || "").split(" ")[0] || "CALL").toUpperCase(),
+      });
+      return liveMids[k]?.mid ?? null;
+    };
+    return livePnl(legs, midOf);
+  }, [legs, liveMids]);
 
   // Re-link a leg to the first card's value after it was overridden.
   function relinkLegField(idx, key) {
@@ -1786,6 +1858,47 @@ function SimulatorInner() {
                   </p>
                 </div>
               ))}
+              {/* Live, for an open structure: what each spread has made since
+                  it was put on. Blank until every leg of a side has a
+                  two-sided quote -- a half-priced spread is not a figure. */}
+              {canPoll && (live?.call || live?.put) && [
+                { label: "Call PNL", value: live.call?.pnl, part: live.call },
+                { label: "Put PNL", value: live.put?.pnl, part: live.put },
+                { label: "Net Option PNL", value: live.net, part: null, strong: true },
+              ].map((c) => (
+                <div key={c.label}
+                  className={`rounded-lg border px-4 py-2.5 ${c.value == null ? "border-slate-200 bg-slate-50"
+                    : c.value < 0 ? "border-red-100 bg-red-50/60" : "border-emerald-100 bg-emerald-50/60"}`}>
+                  <p className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide ${
+                    c.value == null ? "text-slate-500" : c.value < 0 ? "text-red-600" : "text-emerald-700"}`}>
+                    <span className="relative flex h-2 w-2">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                    </span>
+                    {c.label}
+                  </p>
+                  <p className={`${c.strong ? "text-xl" : "text-lg"} font-bold leading-tight ${
+                    c.value == null ? "text-slate-400" : c.value < 0 ? "text-red-600" : "text-emerald-600"}`}>
+                    {c.value == null ? "—" : fmtCcy(c.value)}
+                  </p>
+                  {c.part && (
+                    <p className="text-[10px] text-slate-400">
+                      {fmtOpt(c.part.live)} now vs {fmtOpt(c.part.entry)} in &times; {c.part.qty}
+                    </p>
+                  )}
+                  {c.strong && liveAt && (
+                    <p className="text-[10px] text-slate-400">{liveAt.toLocaleTimeString()}</p>
+                  )}
+                </div>
+              ))}
+
+              {canPoll && liveErr && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-700">Live PNL</p>
+                  <p className="text-[11px] text-amber-800">{liveErr}</p>
+                </div>
+              )}
+
               {/* What the structure makes at expiry and what it is worth as it
                   stands, each way the underlying can go. The Expiry figures are
                   payoffs and carry no time value; the Today ones are priced
