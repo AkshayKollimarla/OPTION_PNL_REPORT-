@@ -1864,24 +1864,23 @@ function SimulatorInner() {
             <SummaryCard label="Per Day Theta"    value={fmtCcy(combinedPerDayTheta)} color={combinedPerDayTheta >= 0 ? "green" : "red"} />
           </div>
 
-          {/* What each side cost to put on. Reading it off the cards meant
-              subtracting two numbers sitting in different columns. */}
-          <div className="mb-6 flex flex-wrap gap-3">
+          {/* The strategy header: what each side cost to put on, what it has
+              made since, and the prices those figures come from. One grid and
+              one card component, so they read as one row rather than three
+              sets of hand-written classes. */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+              {/* Entry. Reading it off the leg cards meant subtracting two
+                  numbers sitting in different columns. */}
               {[spreads.call, spreads.put].filter(Boolean).map((sp) => (
-                <div key={sp.side}
-                  className={`rounded-lg border px-4 py-2.5 ${sp.side === "CALL" ? "border-emerald-100 bg-emerald-50/60" : "border-sky-100 bg-sky-50/60"}`}>
-                  <p className={`text-[11px] font-semibold uppercase tracking-wide ${sp.side === "CALL" ? "text-emerald-700" : "text-sky-700"}`}>
-                    {sp.side === "CALL" ? "Call" : "Put"} Spread
-                  </p>
-                  <p className="text-lg font-bold text-slate-800 leading-tight">
+                <SummaryCard key={sp.side}
+                  label={`${sp.side === "CALL" ? "Call" : "Put"} Spread`}
+                  value={<>
                     {fmtOpt(Math.abs(sp.net))}
                     <span className="ml-1.5 text-[11px] font-semibold uppercase text-slate-400">{sp.kind}</span>
-                  </p>
-                  <p className="text-[11px] text-slate-400">
-                    long {fmtOpt(sp.long)} − short {fmtOpt(sp.short)}
-                  </p>
-                </div>
+                  </>}
+                  sub={`long ${fmtOpt(sp.long)} − short ${fmtOpt(sp.short)}`} />
               ))}
+
               {/* Live, for an open structure: what each spread and the hedge
                   have made since they were put on, and the strategy's net --
                   options plus futures, which is the only net worth a card.
@@ -1891,68 +1890,37 @@ function SimulatorInner() {
                 { label: "Call PNL", value: live.call?.pnl, part: live.call },
                 { label: "Put PNL", value: live.put?.pnl, part: live.put },
                 { label: "Futures PNL", value: live.fut?.pnl, part: live.fut ? { live: live.fut.live, entry: null, qty: live.fut.qty } : null },
-                { label: "Net PNL", value: live.total, part: null, strong: true },
+                { label: "Net PNL", value: live.total, part: null, at: true },
               ].map((c) => (
-                <div key={c.label}
-                  className={`rounded-lg border px-4 py-2.5 ${c.value == null ? "border-slate-200 bg-slate-50"
-                    : c.value < 0 ? "border-red-100 bg-red-50/60" : "border-emerald-100 bg-emerald-50/60"}`}>
-                  <p className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide ${
-                    c.value == null ? "text-slate-500" : c.value < 0 ? "text-red-600" : "text-emerald-700"}`}>
-                    <span className="relative flex h-2 w-2">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                      <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-                    </span>
-                    {c.label}
-                  </p>
-                  <p className={`${c.strong ? "text-xl" : "text-lg"} font-bold leading-tight ${
-                    c.value == null ? "text-slate-400" : c.value < 0 ? "text-red-600" : "text-emerald-600"}`}>
-                    {c.value == null ? "—" : fmtCcy(c.value)}
-                  </p>
-                  {c.part && (
-                    <p className="text-[10px] text-slate-400">
-                      {c.part.entry === null
-                        ? <>underlying {fmtOpt(c.part.live)} &times; {c.part.qty}</>
-                        : <>{fmtOpt(c.part.live)} now vs {fmtOpt(c.part.entry)} in &times; {c.part.qty}</>}
-                    </p>
-                  )}
-                  {c.strong && liveAt && (
-                    <p className="text-[10px] text-slate-400">{liveAt.toLocaleTimeString()}</p>
-                  )}
-                </div>
+                <SummaryCard key={c.label} live label={c.label}
+                  color={c.value == null ? undefined : c.value < 0 ? "red" : "green"}
+                  value={c.value == null ? "—" : fmtCcy(c.value)}
+                  sub={c.part
+                    ? (c.part.entry === null
+                        ? `underlying ${fmtOpt(c.part.live)} × ${c.part.qty}`
+                        : `${fmtOpt(c.part.live)} now vs ${fmtOpt(c.part.entry)} in × ${c.part.qty}`)
+                    : (c.at && liveAt ? liveAt.toLocaleTimeString() : null)} />
               ))}
 
-              {canPoll && liveErr && (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-700">Live PNL</p>
-                  <p className="text-[11px] text-amber-800">{liveErr}</p>
-                </div>
-              )}
-
-              {/* The prices the live figures above are worked out from: each
-                  spread as it stands now, and the underlying. Quotes, not
-                  profits, so they are not coloured by sign -- a call spread
-                  sold for a credit is a negative number and nothing is wrong
-                  with it. */}
+              {/* The prices those figures are worked out from. Quotes, not
+                  profits, so they keep the neutral value colour -- a call
+                  spread sold for a credit is a negative number and nothing is
+                  wrong with it. */}
               {canPoll && [
                 { label: "Live Call Spread", value: live?.call?.live, sub: live?.call ? `entry ${px(live.call.entry)}` : null },
                 { label: "Live Put Spread",  value: live?.put?.live,  sub: live?.put ? `entry ${px(live.put.entry)}` : null },
                 { label: "Futures Live Price", value: liveFut,
                   sub: [legs[0]?.form.token, futEntryShown != null ? `entry ${px(futEntryShown)}` : null].filter(Boolean).join(" · ") || null },
               ].map((c) => (
-                <div key={c.label} className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5">
-                  <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                    <span className="relative flex h-2 w-2">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                      <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-                    </span>
-                    {c.label}
-                  </p>
-                  <p className={`text-lg font-bold leading-tight ${c.value == null ? "text-slate-400" : "text-slate-800"}`}>
-                    {px(c.value)}
-                  </p>
-                  {c.sub && <p className="text-[10px] text-slate-400">{c.sub}</p>}
-                </div>
+                <SummaryCard key={c.label} live label={c.label} value={px(c.value)} sub={c.sub} />
               ))}
+
+              {canPoll && liveErr && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                  <p className="mb-1 text-xs font-medium uppercase tracking-wide text-amber-700">Live PNL</p>
+                  <p className="text-[11px] text-amber-800">{liveErr}</p>
+                </div>
+              )}
             </div>
 
           {/* Scenario clock. Only the Black-Scholes rows move with it — the
@@ -2658,12 +2626,26 @@ function CalcRow({ label, value, signed, neg, big }) {
   );
 }
 
-function SummaryCard({ label, value, color }) {
+// `sub` is a working line under the figure; `live` adds the ticking dot.
+// Everything in the strategy header goes through here rather than carrying its
+// own classes -- the tinted cards it replaced were washing out white in dark
+// mode, because a tint at partial opacity is a token of its own and the dark
+// stylesheet only remaps the solid ones.
+function SummaryCard({ label, value, color, sub, live }) {
   const cls = { blue:"text-blue-600", green:"text-emerald-600", red:"text-red-600", purple:"text-purple-600" }[color] || "text-slate-700";
   return (
     <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-      <p className="text-xs font-medium text-slate-400 mb-1">{label}</p>
+      <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-400">
+        {live && (
+          <span className="relative flex h-2 w-2 shrink-0">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+          </span>
+        )}
+        {label}
+      </p>
       <p className={`text-xl font-bold ${cls}`}>{value}</p>
+      {sub && <p className="mt-0.5 text-[10px] leading-snug text-slate-400">{sub}</p>}
     </div>
   );
 }

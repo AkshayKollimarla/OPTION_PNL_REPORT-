@@ -129,13 +129,22 @@ body {
    becomes a translucent wash of its own hue: the colour coding survives, the
    block picks up whatever surface sits beneath it, and it stays legible on
    cards and on the page background alike. */
-.dark .bg-red-50      { background-color: rgba(239, 68, 68, 0.12); }
+/* A tint at partial opacity is a separate class, so .bg-red-50\/40 is not
+   covered by the rule for .bg-red-50 and stays near-white on a dark page.
+   The ones in use are listed with their solid parent. */
+.dark .bg-red-50,
+.dark .bg-red-50\/40,
+.dark .bg-red-50\/50,
+.dark .bg-red-50\/60   { background-color: rgba(239, 68, 68, 0.12); }
 .dark .bg-red-100     { background-color: rgba(239, 68, 68, 0.20); }
 .dark .bg-red-500\/10 { background-color: rgba(239, 68, 68, 0.14); }
 .dark .bg-red-500\/20 { background-color: rgba(239, 68, 68, 0.24); }
 .dark .hover\:bg-red-50:hover  { background-color: rgba(239, 68, 68, 0.18); }
 .dark .hover\:bg-red-100:hover { background-color: rgba(239, 68, 68, 0.26); }
-.dark .bg-emerald-50  { background-color: rgba(16, 185, 129, 0.12); }
+.dark .bg-emerald-50,
+.dark .bg-emerald-50\/40,
+.dark .bg-emerald-50\/50,
+.dark .bg-emerald-50\/60 { background-color: rgba(16, 185, 129, 0.12); }
 .dark .bg-emerald-100 { background-color: rgba(16, 185, 129, 0.20); }
 .dark .bg-green-50    { background-color: rgba(34, 197, 94, 0.12); }
 .dark .bg-blue-50     { background-color: rgba(59, 130, 246, 0.12); }
