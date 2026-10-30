@@ -130,12 +130,18 @@ async function testDeribit(acct, key) {
   const json = await res.json();
 
   if (json.error) {
+    // The useful half of a Deribit rejection is in error.data.reason, not in
+    // error.message. "unauthorized (code 13009)" is what it says whether the
+    // secret is wrong or the key simply refuses this machine, and dropping
+    // the reason turned a one-line answer into a manual re-debug -- which it
+    // did: a key that was rejected for its source IP was read as a testnet
+    // key pasted into a live account, which it was not.
+    const reason = json.error.data?.reason;
+
     return {
       ok: false,
-      error: `Deribit rejected the credentials: "${json.error.message}" (code ${json.error.code})`,
-      hint: acct.testnet
-        ? "You are connecting to TEST.deribit.com — make sure these keys are from test.deribit.com."
-        : "You are connecting to LIVE deribit.com — make sure these keys are from your live Deribit account, not testnet.",
+      error: `Deribit rejected the credentials: "${json.error.message}"${reason ? ` — ${reason}` : ""} (code ${json.error.code})`,
+      hint: await deribitHint(reason, acct),
       endpoint: base,
       client_id_preview: `${key.slice(0, 8)}…`,
     };
@@ -146,4 +152,29 @@ async function testDeribit(acct, key) {
     scope: json.result?.scope,
     endpoint: base,
   };
+}
+
+// Deribit API keys can be pinned to a list of IP addresses. The request is
+// made by the server, not the browser, so the address that has to be on that
+// list is the server's -- which is not something anyone can guess from a
+// laptop. Worth one call on a failure path to be able to name it.
+async function outboundIp() {
+  try {
+    const res = await fetch("https://api.ipify.org", { cache: "no-store", signal: AbortSignal.timeout(4000) });
+    const ip = (await res.text()).trim();
+    return /^[0-9.]+$/.test(ip) ? ip : null;
+  } catch { return null; }
+}
+
+async function deribitHint(reason, acct) {
+  if (reason === "bad_ip") {
+    const ip = await outboundIp();
+    return `The key and secret are right — Deribit recognised them and refused the caller's IP address. This key has an IP allowlist that does not include this server${ip ? ` (${ip})` : ""}. Add that address under API → edit key → IP whitelist on deribit.com, or clear the whitelist on the key.`;
+  }
+  if (reason === "invalid_credentials" || !reason) {
+    return acct.testnet
+      ? "You are connecting to TEST.deribit.com — make sure these keys are from test.deribit.com."
+      : "You are connecting to LIVE deribit.com — make sure these keys are from your live Deribit account, not testnet.";
+  }
+  return `Deribit gave the reason "${reason}".`;
 }
