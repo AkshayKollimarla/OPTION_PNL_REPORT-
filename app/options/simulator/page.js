@@ -9,6 +9,8 @@ import { chainReloadAction, usMarketToday } from "../../../lib/chain-reload";
 import { DISTANCE_KEYS, distanceDecision } from "../../../lib/leg-distance";
 import { spreadPrices, livePnl, futuresPnl } from "../../../lib/spread-price";
 import { legKey } from "../../../lib/leg-key";
+import OptionChainGrid from "../../../components/OptionChainGrid";
+import SelectedLegsStrip from "../../../components/SelectedLegsStrip";
 
 const RISK_FREE = 0.05;
 
@@ -568,6 +570,103 @@ function SimulatorInner() {
     return ps.length && ps.every((p) => p === ps[0]) ? ps[0] : null;
   })();
 
+  /* ── Chain picker ─────────────────────────────────────
+     The structure is built by clicking prices rather than typing contracts.
+     One chain for the whole structure, because every leg of one shares a
+     token -- which is also why the token comes off the first card rather than
+     being a control of its own. */
+  const chainToken = legs[masterLegIdx]?.form.token || legs[0]?.form.token || "";
+  const [chainExpiry, setChainExpiry] = useState("");
+  const [chainExpiries, setChainExpiries] = useState([]);
+
+  useEffect(() => {
+    if (!selectedAcct || !chainToken) { setChainExpiries([]); return undefined; }
+    let stopped = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/market?account_id=${selectedAcct}&token=${encodeURIComponent(chainToken)}&action=chain`);
+        const j = await res.json();
+        if (stopped) return;
+        const list = (j.expiries || []).map((e) => ({ date: e.date, label: e.label || e.date }));
+        setChainExpiries(list);
+        // Keep the expiry already being looked at if the new chain still has
+        // it; otherwise fall in behind whatever the legs are set to.
+        setChainExpiry((cur) => (cur && list.some((e) => e.date === cur))
+          ? cur
+          : (legs.find((l) => l.form.expiry)?.form.expiry || list[0]?.date || ""));
+      } catch {
+        if (!stopped) setChainExpiries([]);
+      }
+    })();
+    return () => { stopped = true; };
+    // legs deliberately absent: this reloads on a change of chain, not on
+    // every edit to a leg sitting under it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAcct, chainToken]);
+
+  // What the chain should show as already taken. Derived from the legs rather
+  // than tracked beside them, so the two cannot drift apart.
+  // Which contract a clicked price belongs to. Compared against what a leg
+  // currently shows, so re-picking the strike by hand ends the claim without
+  // anything having to clear it.
+  const contractKey = (optType, strike, expiry) => `${expiry}|${Number(strike)}|${String(optType).toUpperCase()}`;
+
+  const picked = useMemo(() => legs.map((l) => {
+    const [optType, side] = (l.type || "").split(" ");
+    return { optType, side, strike: strikeNumber(l.form.options_strike), expiry: l.form.expiry };
+  }).filter((p) => p.strike > 0 && p.expiry), [legs]);
+
+  /**
+   * A click in the chain lands on the card for that leg type: the first one
+   * of that type still empty, or a new card when they are all taken.
+   *
+   * Clicking the same contract again takes it back off. The card stays and is
+   * emptied rather than being deleted -- a four-card structure losing a card
+   * to a mis-click would be a worse outcome than an empty one.
+   */
+  function pickFromChain({ optType, side, strike, expiry, price }) {
+    const type = `${optType} ${side}`;
+    setLegs((prev) => {
+      const same = (l) => l.type === type
+        && Number(strikeNumber(l.form.options_strike)) === Number(strike)
+        && l.form.expiry === expiry;
+      const match = prev.findIndex(same);
+      if (match >= 0) {
+        return prev.map((l, i) => i === match
+          ? { ...l, form: { ...l.form, options_strike: "", opt_entry_price: "" } }
+          : l);
+      }
+      const fill = (l) => {
+        // Unsized legs get one lot, signed by direction. A leg carrying a
+        // contract and no quantity is not a position, and leaving it blank
+        // makes every figure below read zero for a structure that looks set.
+        const hasQty = String(l.form.opt_entry_qty ?? "").trim() !== "" && Number(l.form.opt_entry_qty) !== 0;
+        const qty = hasQty ? l.form.opt_entry_qty : (side === "SHORT" ? "-1" : "1");
+        return {
+          ...l,
+          priceFromChain: price === null || price === undefined ? null : contractKey(optType, strike, expiry),
+          form: {
+            ...l.form,
+            token: chainToken || l.form.token,
+            expiry,
+            options_strike: String(strike),
+            opt_entry_qty: String(qty),
+            // A contract with no price on that side is still a contract worth
+            // putting on the card; it just arrives without a fill.
+            opt_entry_price: price === null || price === undefined ? l.form.opt_entry_price : String(price),
+          },
+        };
+      };
+      const free = prev.findIndex((l) => l.type === type && !strikeNumber(l.form.options_strike));
+      if (free >= 0) return prev.map((l, i) => (i === free ? fill(l) : l));
+
+      const leg = makeLeg(type);
+      const master = prev[masterLegIdx];
+      if (master) for (const k of SYNCED_KEYS) leg.form[k] = syncedValueFor(k, master.form[k] ?? "", type);
+      return [...prev, fill(leg)];
+    });
+  }
+
   // Two figures added, each already rounded: without this the sum carries a
   // binary tail the parts do not show.
   const exactMoney = (v) => Math.round(v * 1e6) / 1e6;
@@ -580,6 +679,44 @@ function SimulatorInner() {
   const [liveFut, setLiveFut] = useState(null);
   const [liveAt, setLiveAt] = useState(null);
   const [liveErr, setLiveErr] = useState(null);
+
+  // The strip under the chain: one line per leg, with the live mid it is
+  // being marked against.
+  const stripLegs = useMemo(() => legs.map((l, i) => {
+    const [optType, side] = (l.type || "").split(" ");
+    const strike = strikeNumber(l.form.options_strike);
+    const qty = Number(l.form.opt_entry_qty);
+    const entry = Number(l.form.opt_entry_price);
+    const mid = (strike > 0 && l.form.expiry && liveMids)
+      ? (liveMids[legKey({ token: l.form.token, expiry: l.form.expiry, strike, optType })]?.mid ?? null)
+      : null;
+    const iv = Number(l.form.iv);
+    return {
+      key: i,
+      strike: l.form.options_strike || "",
+      optType, side,
+      expiry: l.form.expiry || "",
+      size: l.form.opt_entry_qty === "" ? "" : (Math.abs(qty) || ""),
+      price: l.form.opt_entry_price ?? "",
+      iv: Number.isFinite(iv) && iv > 0 ? iv / 100 : null,
+      // Marked against the live mid, which is the same number the PnL cards
+      // above are worked from -- so a leg's line and the structure's total
+      // cannot tell different stories.
+      pnl: mid === null || !Number.isFinite(entry) || !Number.isFinite(qty) || !qty
+        ? null : Math.round((mid - entry) * qty * 1e6) / 1e6,
+    };
+  }), [legs, liveMids]);
+
+  function stripChange(idx, field, value) {
+    if (field === "price") return setLegField(idx, "opt_entry_price", value);
+    // Size is typed unsigned; the sign is the leg's direction and belongs to
+    // the type, not to anything anyone should have to key in.
+    const abs = Math.abs(Number(value));
+    const signed = value === "" || !Number.isFinite(abs) ? ""
+      : String(legs[idx]?.type?.endsWith("SHORT") ? -abs : abs);
+    return setLegField(idx, "opt_entry_qty", signed);
+  }
+
 
   // Only while something is actually open: a closed structure has no live
   // value, and a half-built one has no contracts to ask about.
@@ -1786,6 +1923,28 @@ function SimulatorInner() {
       )}
 
       <div className="p-4 sm:p-6 space-y-6">
+        {/* ── Chain picker ──
+            Where the structure is built. The cards below are still the full
+            editor -- distances, the futures hedge, dates -- but a contract is
+            chosen here, by its price, rather than typed in three fields. */}
+        <div className="space-y-3">
+          <OptionChainGrid
+            accountId={selectedAcct}
+            token={chainToken}
+            expiry={chainExpiry}
+            expiries={chainExpiries}
+            onExpiryChange={setChainExpiry}
+            picked={picked}
+            onPick={pickFromChain}
+          />
+          <SelectedLegsStrip
+            legs={stripLegs}
+            onChange={stripChange}
+            onSide={(idx, side) => changeLegType(idx, `${(legs[idx]?.type || "CALL LONG").split(" ")[0]} ${side}`)}
+            onRemove={(idx) => removeLeg(idx)}
+          />
+        </div>
+
         {/* ── Leg cards ──
             Leg 1 carries the whole structure and keeps every field; the rest
             are compact and stack beside it. Two independent columns rather
@@ -1819,6 +1978,7 @@ function SimulatorInner() {
                   compact={idx !== masterLegIdx}
                   masterForm={legs[masterLegIdx]?.form || null}
                   syncedKeys={SYNCED_KEYS}
+                  priceFromChain={leg.priceFromChain || null}
                 />
               );
             };
@@ -2078,7 +2238,7 @@ export default function CombinedSimulator() {
 
 /* ── Leg Card ─────────────────────────────────────────── */
 
-const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, form, set, setBulk, setSharedField, derived, canRemove, onRemove, accountId, isSyncMaster = false, syncOverrides = {}, onRelinkField, compact = false, masterForm = null, syncedKeys = [] }, ref) {
+const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, form, set, setBulk, setSharedField, derived, canRemove, onRemove, accountId, isSyncMaster = false, syncOverrides = {}, onRelinkField, compact = false, masterForm = null, syncedKeys = [], priceFromChain = null }, ref) {
   const inp   = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
   const style = LEG_STYLES[legType];
 
@@ -2255,7 +2415,14 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
         // while editing used to overwrite a recorded entry price with the live
         // mid (2.47 became 5.315 on an NBIS leg) before anyone asked for it.
         const upd = { opt_mid_price_raw: String(data.mid_price_raw ?? data.mark_price_raw ?? "") };
-        if (!preserveRef.current) {
+        // The same argument one step further on: a price clicked in the chain
+        // IS the entry -- the bid because it was sold there, the ask because
+        // it was bought there -- and refilling it with the venue's mark would
+        // quietly turn a chosen side into a midpoint. Only while the leg still
+        // shows that contract.
+        const chosenHere = priceFromChain
+          && priceFromChain === `${form.expiry}|${Number(strikeNumber(form.options_strike))}|${String(form.option_type || "").toUpperCase()}`;
+        if (!preserveRef.current && !chosenHere) {
           upd.opt_entry_price = fmtOptPrice(data.mark_price_usd, data);
           if (data.mark_iv != null) upd.iv = String(Math.round(data.mark_iv * 10) / 10);
         }
@@ -2264,7 +2431,7 @@ const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, f
       .catch(() => {})
       .finally(() => { if (!cancelled) setFetchingTicker(false); });
     return () => { cancelled = true; };
-  }, [form.expiry, form.options_strike, form.option_type, accountId, liveExpiries.length]);
+  }, [form.expiry, form.options_strike, form.option_type, accountId, liveExpiries.length, priceFromChain]);
 
   async function refreshTicker() {
     preserveRef.current = false; // User explicitly asked for live price — always override

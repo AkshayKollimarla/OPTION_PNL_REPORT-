@@ -86,7 +86,9 @@ body {
 .dark .hover\:bg-slate-50\/60:hover,
 .dark .hover\:bg-slate-50\/80:hover { background-color: var(--surface-3); }
 
-.dark .bg-slate-100 { background-color: var(--surface-3); }
+.dark .bg-slate-100,
+.dark .bg-slate-100\/60,
+.dark .bg-slate-100\/70 { background-color: var(--surface-3); }
 .dark .bg-slate-200 { background-color: #2a3752; }
 .dark .bg-slate-700 { background-color: #223049; }
 .dark .bg-slate-800 { background-color: #1a2540; }
@@ -198,7 +200,7 @@ body {
    The -600/-700/-800 shades are tuned for white backgrounds and go muddy on
    dark ones, so each steps up to its -400/-300 sibling. P&L green and red
    matter most: they have to stay instantly tellable apart at a glance. */
-.dark .text-red-700, .dark .text-red-600 { color: #f87171; }
+.dark .text-red-800, .dark .text-red-700, .dark .text-red-600 { color: #f87171; }
 .dark .text-red-500 { color: #fca5a5; }
 .dark .text-emerald-800, .dark .text-emerald-700, .dark .text-emerald-600 { color: #34d399; }
 .dark .text-emerald-500 { color: #6ee7b7; }
