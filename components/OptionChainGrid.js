@@ -33,8 +33,8 @@ function PriceCell({ side, optType, strike, expiry, pickedOf, onPick }) {
   const half = (kind, value, dir) => {
     const on = pickedOf(optType, dir, strike);
     const tone = kind === "BID"
-      ? (on ? "bg-emerald-100 text-emerald-800 font-bold ring-1 ring-emerald-400" : "text-emerald-600 hover:bg-emerald-50")
-      : (on ? "bg-red-100 text-red-800 font-bold ring-1 ring-red-400" : "text-red-600 hover:bg-red-50");
+      ? (on ? "bg-emerald-100 text-emerald-800 font-bold ring-1 ring-emerald-400" : "text-emerald-700 hover:bg-emerald-50")
+      : (on ? "bg-red-100 text-red-800 font-bold ring-1 ring-red-400" : "text-red-700 hover:bg-red-50");
     return (
       <button
         type="button"
@@ -181,15 +181,15 @@ export default function OptionChainGrid({
 
   const h = (side) => (label) => (
     <th key={`${side}-${label}`}
-      className="px-2 py-1 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+      className="px-2 py-1 text-right text-[11px] font-bold uppercase tracking-wide text-slate-700">
       {label}
     </th>
   );
   const priceHead = (side) => (
     <th key={`${side}-price`} className="px-2 py-1">
       <div className={`flex items-center justify-center ${PRICE_GAP}`}>
-        <span className={`${PRICE_W} text-center text-[11px] font-semibold uppercase tracking-wide text-emerald-600`}>Bid</span>
-        <span className={`${PRICE_W} text-center text-[11px] font-semibold uppercase tracking-wide text-red-600`}>Ask</span>
+        <span className={`${PRICE_W} text-center text-[11px] font-bold uppercase tracking-wide text-emerald-700`}>Bid</span>
+        <span className={`${PRICE_W} text-center text-[11px] font-bold uppercase tracking-wide text-red-700`}>Ask</span>
       </div>
     </th>
   );
@@ -262,7 +262,7 @@ export default function OptionChainGrid({
               </tr>
               <tr className="border-b border-slate-200">
                 {showCalls && callHeads}
-                <th className="px-2 py-1 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-700">Strike</th>
+                <th className="px-2 py-1 text-center text-[11px] font-bold uppercase tracking-wide text-slate-700">Strike</th>
                 {showPuts && putHeads}
               </tr>
             </thead>

@@ -49,7 +49,7 @@ export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemov
           <tr className="border-b border-slate-200">
             {COLUMNS.map((h, i) => (
               <th key={h || `blank${i}`}
-                className="px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                className="px-2 py-1.5 text-left text-[11px] font-bold uppercase tracking-wide text-slate-700">
                 {h}
               </th>
             ))}
