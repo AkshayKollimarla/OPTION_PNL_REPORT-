@@ -234,9 +234,26 @@ function orderSavedLegs(members) {
   return { legs, ids: ordered.map((t) => t.id) };
 }
 
+/**
+ * Today, as a date input wants it.
+ *
+ * Built from the local parts rather than sliced off toISOString(), which is
+ * UTC: for anyone east of Greenwich that reads back as yesterday for the
+ * first hours of the day, and this app has been bitten by exactly that before
+ * on a day count.
+ */
+function todayLocal() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// A structure is almost always entered the day it is built, so the date comes
+// filled in. A saved strategy overwrites it on load, so editing an old one
+// still shows the day it was actually entered.
 const makeLeg = (type = "CALL LONG") => ({
   type,
-  form: { ...EMPTY, option_type: type.startsWith("CALL") ? "CALL" : "PUT", iv: "" },
+  form: { ...EMPTY, entry_date: todayLocal(), option_type: type.startsWith("CALL") ? "CALL" : "PUT", iv: "" },
 });
 
 /* ── Main component ───────────────────────────────────── */
@@ -792,6 +809,17 @@ function SimulatorInner() {
     value: legs[masterLegIdx]?.form[key] ?? "",
     onChange: (e) => setLegField(masterLegIdx, key, e.target.value),
   });
+
+  /**
+   * Closing a structure is what gives it an end date, so changing the status
+   * sets one rather than leaving it to be typed. Reopening clears it again:
+   * an open structure has not ended, and a leftover date would be read as
+   * though it had.
+   */
+  function setStatus(value) {
+    setLegField(masterLegIdx, "status", value);
+    setLegField(masterLegIdx, "end_date", value === "closed" ? todayLocal() : "");
+  }
 
   function stripChange(idx, field, value) {
     if (field === "price") return setLegField(idx, "opt_entry_price", value);
@@ -2060,7 +2088,8 @@ function SimulatorInner() {
             <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-700">On close</p>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
               <Field label="Status">
-                <select {...shared("status")} className={barInput}>
+                <select value={legs[masterLegIdx]?.form.status ?? "open"}
+                  onChange={(e) => setStatus(e.target.value)} className={barInput}>
                   <option value="open">Open</option>
                   <option value="closed">Closed</option>
                 </select>
