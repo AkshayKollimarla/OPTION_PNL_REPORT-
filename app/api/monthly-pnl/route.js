@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import pool from "../../../lib/options-db";
-import { buildMonths } from "../../../lib/monthly-pnl";
 
 export const dynamic = "force-dynamic";
 
@@ -32,8 +31,12 @@ export async function GET() {
        GROUP BY \`key\`
        ORDER BY ended DESC`);
 
-    return NextResponse.json(buildMonths(rows));
+    // The lines, ungrouped. Grouping into months happens in the page so that
+    // narrowing to one account regroups and re-totals instantly, off the rows
+    // already in hand, rather than going back to the database for each pick --
+    // and so one implementation does the totalling either way.
+    return NextResponse.json({ rows });
   } catch (err) {
-    return NextResponse.json({ error: err.message, months: [], undated: [] }, { status: 200 });
+    return NextResponse.json({ error: err.message, rows: [] }, { status: 200 });
   }
 }

@@ -2,11 +2,18 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toCsv, downloadCsv } from "../../lib/csv";
+import { buildMonths } from "../../lib/monthly-pnl";
 
 /**
  * The monthly trade log, filled in by closing a strategy rather than by
  * typing it out again.
  */
+
+// A sentinel for the trades that carry no account. Spelt out rather than a
+// control character: a NUL in the source makes git treat the whole file as
+// binary and stop showing diffs for it.
+const NO_ACCOUNT = "__no_account__";
+const accountLabel = (a) => (a === NO_ACCOUNT ? "No account" : a);
 
 const money = (v) => {
   const n = Number(v);
@@ -36,23 +43,49 @@ const COLUMNS = [
 ];
 
 export default function MonthlyPnlPage() {
-  const [data, setData] = useState(null);
+  const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
+  const [account, setAccount] = useState("all");
 
   useEffect(() => {
     fetch("/api/monthly-pnl", { cache: "no-store" })
       .then((r) => r.json())
-      .then((j) => (j.error ? setErr(j.error) : setData(j)))
+      .then((j) => (j.error ? setErr(j.error) : setRows(j.rows || [])))
       .catch((e) => setErr(e.message));
   }, []);
 
-  const months = data?.months || [];
-  const grand = data?.grand;
+  // Taken from the closed book itself rather than the accounts table, so the
+  // list only offers accounts that actually have something closed under them.
+  //
+  // Structures with no account get an entry of their own. Thirty of them are
+  // in this book -- entries from before trades carried an account at all --
+  // and without somewhere to put them they would be reachable only under
+  // "all", so going through the accounts one by one would silently miss a
+  // quarter of the closed trades.
+  const accounts = useMemo(() => {
+    const seen = new Set();
+    let none = false;
+    for (const r of rows || []) { if (r.account) seen.add(r.account); else none = true; }
+    return { named: [...seen].sort(), none };
+  }, [rows]);
+
+  // Narrowing regroups and re-totals through the same function the whole page
+  // is built on, so a month's total for one account is arrived at the same way
+  // as the total for all of them.
+  const { months, undated, grand } = useMemo(() => {
+    const all = rows || [];
+    const picked = account === "all" ? all
+      : account === NO_ACCOUNT ? all.filter((r) => !r.account)
+      : all.filter((r) => r.account === account);
+    return buildMonths(picked);
+  }, [rows, account]);
+
+  const data = rows ? { months, undated, grand } : null;
 
   const csvFor = (m) => {
     const rows = [...m.lines.map((l) => ({ ...l, month: m.label })),
       { month: m.label, coin: "TOTAL", day: "", ...m.totals }];
-    downloadCsv(`trade-log-${m.key}.csv`,
+    downloadCsv(`trade-log-${m.key}${account === "all" ? "" : "-" + accountLabel(account).toLowerCase().replace(/[^a-z0-9]+/g, "-")}.csv`,
       toCsv(rows, [{ key: "month", label: "Month" }, ...COLUMNS]));
   };
 
@@ -66,26 +99,43 @@ export default function MonthlyPnlPage() {
             typed twice — a strategy appears the moment it is marked closed with its figures.
           </p>
         </div>
-        {grand?.count > 0 && (
+        <div className="flex items-end gap-3">
+          {(accounts.named.length + (accounts.none ? 1 : 0)) > 1 && (
+            <label className="block">
+              <span className="mb-1 block text-[11px] font-semibold text-slate-600">Account</span>
+              <select value={account} onChange={(e) => setAccount(e.target.value)}
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] font-semibold text-slate-700">
+                <option value="all">All accounts</option>
+                {accounts.named.map((a) => <option key={a} value={a}>{a}</option>)}
+                {accounts.none && <option value={NO_ACCOUNT}>No account</option>}
+              </select>
+            </label>
+          )}
+          {grand?.count > 0 && (
           <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-2 text-right">
             <p className="text-[11px] font-bold uppercase tracking-wide text-slate-600">All months</p>
             <p className={`text-xl font-bold tabular-nums ${grand.booked < 0 ? "text-red-600" : "text-emerald-600"}`}>
               {money(grand.booked)}
             </p>
-            <p className="text-[11px] text-slate-500">{grand.count} closed</p>
+            <p className="text-[11px] text-slate-500">
+              {grand.count} closed{account === "all" ? "" : ` · ${accountLabel(account)}`}
+            </p>
           </div>
-        )}
+          )}
+        </div>
       </div>
 
       {err && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{err}</div>
       )}
 
-      {!data && !err && <p className="text-sm text-slate-500 animate-pulse">Loading the closed book…</p>}
+      {!rows && !err && <p className="text-sm text-slate-500 animate-pulse">Loading the closed book…</p>}
 
       {data && !months.length && (
         <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
-          Nothing closed yet. Set a strategy&apos;s status to Closed in the simulator and it will appear here.
+          {account === "all"
+            ? "Nothing closed yet. Set a strategy’s status to Closed in the simulator and it will appear here."
+            : `Nothing closed under ${accountLabel(account)}.`}
         </div>
       )}
 
