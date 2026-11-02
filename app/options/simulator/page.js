@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, Suspense, forwardRef, useImperativeHandle } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, Suspense, forwardRef, useImperativeHandle } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { computeDerived, strikeNumber } from "../../../lib/options-calculations";
 import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
@@ -13,6 +13,15 @@ import OptionChainGrid from "../../../components/OptionChainGrid";
 import SelectedLegsStrip from "../../../components/SelectedLegsStrip";
 
 const RISK_FREE = 0.05;
+
+const barInput = "w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none";
+
+const Field = ({ label, children }) => (
+  <label className="block">
+    <span className="mb-0.5 block text-[10px] font-medium text-slate-400">{label}</span>
+    {children}
+  </label>
+);
 
 const EMPTY = {
   entry_date: "", token: "", investment: "",
@@ -577,6 +586,7 @@ function SimulatorInner() {
      being a control of its own. */
   const chainToken = legs[masterLegIdx]?.form.token || legs[0]?.form.token || "";
   const [chainExpiry, setChainExpiry] = useState("");
+  const [cardsOpen, setCardsOpen] = useState(false);
   const [chainExpiries, setChainExpiries] = useState([]);
 
   useEffect(() => {
@@ -606,6 +616,16 @@ function SimulatorInner() {
 
   // What the chain should show as already taken. Derived from the legs rather
   // than tracked beside them, so the two cannot drift apart.
+  // The last chain payload, kept so the legs can read their IV and premium
+  // off the same quotes the grid is showing. The IV column used to read a
+  // saved form field, which only ever changed when the per-leg Refresh button
+  // was pressed -- so it sat blank on any leg nobody had refreshed.
+  const [chainQuotes, setChainQuotes] = useState(null);
+  const quoteOf = useCallback((optType, strike) => {
+    const row = chainQuotes?.rows?.find((r) => Number(r.strike) === Number(strike));
+    return (optType === "CALL" ? row?.call : row?.put) || null;
+  }, [chainQuotes]);
+
   // Which contract a clicked price belongs to. Compared against what a leg
   // currently shows, so re-picking the strike by hand ends the claim without
   // anything having to clear it.
@@ -687,10 +707,21 @@ function SimulatorInner() {
     const strike = strikeNumber(l.form.options_strike);
     const qty = Number(l.form.opt_entry_qty);
     const entry = Number(l.form.opt_entry_price);
-    const mid = (strike > 0 && l.form.expiry && liveMids)
+    const q = strike > 0 ? quoteOf(optType, strike) : null;
+    // The live mid, from whichever feed has it. The chain covers the expiry on
+    // screen; liveMids covers the legs of an open structure, which may sit on
+    // an expiry the chain is not currently showing.
+    const mid = (strike > 0 && l.form.expiry && liveMids
       ? (liveMids[legKey({ token: l.form.token, expiry: l.form.expiry, strike, optType })]?.mid ?? null)
-      : null;
-    const iv = Number(l.form.iv);
+      : null) ?? q?.theor ?? null;
+    const savedIv = Number(l.form.iv);
+    // An empty box is not a zero. Number("") is 0 and Number.isFinite(0) is
+    // true, which made every blank leg report a confident P&L of $0.00.
+    const mmRaw = l.form.market_making_pl;
+    const hasMm = String(mmRaw ?? "").trim() !== "" && Number.isFinite(Number(mmRaw));
+    const mm = hasMm ? Number(mmRaw) : 0;
+    const optPnl = mid === null || !Number.isFinite(entry) || !Number.isFinite(qty) || !qty
+      ? null : (mid - entry) * qty;
     return {
       key: i,
       strike: l.form.options_strike || "",
@@ -698,17 +729,32 @@ function SimulatorInner() {
       expiry: l.form.expiry || "",
       size: l.form.opt_entry_qty === "" ? "" : (Math.abs(qty) || ""),
       price: l.form.opt_entry_price ?? "",
-      iv: Number.isFinite(iv) && iv > 0 ? iv / 100 : null,
-      // Marked against the live mid, which is the same number the PnL cards
-      // above are worked from -- so a leg's line and the structure's total
-      // cannot tell different stories.
-      pnl: mid === null || !Number.isFinite(entry) || !Number.isFinite(qty) || !qty
-        ? null : Math.round((mid - entry) * qty * 1e6) / 1e6,
+      exit: l.form.opt_exit_price ?? "",
+      mm: l.form.market_making_pl ?? "",
+      // Live off the chain where the contract is on it, falling back to the
+      // leg's own saved figure.
+      iv: q?.iv ?? (Number.isFinite(savedIv) && savedIv > 0 ? savedIv / 100 : null),
+      // Marked against the live mid -- the same number the PnL cards above are
+      // worked from, so a leg's line and the structure's total cannot tell
+      // different stories -- with the market-making figure carried in, since
+      // that is money the leg made or lost too.
+      pnl: optPnl === null && !hasMm ? null
+        : Math.round(((optPnl || 0) + mm) * 1e6) / 1e6,
     };
-  }), [legs, liveMids]);
+  }), [legs, liveMids, quoteOf]);
+
+  // Fields that belong to the structure rather than to a leg. They are
+  // written to the first card, which every other leg follows.
+  const shared = (key) => ({
+    value: legs[masterLegIdx]?.form[key] ?? "",
+    onChange: (e) => setLegField(masterLegIdx, key, e.target.value),
+  });
 
   function stripChange(idx, field, value) {
     if (field === "price") return setLegField(idx, "opt_entry_price", value);
+    if (field === "exit") return setLegField(idx, "opt_exit_price", value);
+    if (field === "mm") return setLegField(idx, "market_making_pl", value);
+    if (field === "strike") return setLegField(idx, "options_strike", value);
     // Size is typed unsigned; the sign is the leg's direction and belongs to
     // the type, not to anything anyone should have to key in.
     const abs = Math.abs(Number(value));
@@ -1934,8 +1980,13 @@ function SimulatorInner() {
             expiry={chainExpiry}
             expiries={chainExpiries}
             onExpiryChange={setChainExpiry}
+            tokenControl={
+              <TokenSelect accountId={selectedAcct} value={chainToken}
+                onChange={(v) => setLegField(masterLegIdx, "token", v)} />
+            }
             picked={picked}
             onPick={pickFromChain}
+            onQuotes={setChainQuotes}
           />
           <SelectedLegsStrip
             legs={stripLegs}
@@ -1943,14 +1994,55 @@ function SimulatorInner() {
             onSide={(idx, side) => changeLegType(idx, `${(legs[idx]?.type || "CALL LONG").split(" ")[0]} ${side}`)}
             onRemove={(idx) => removeLeg(idx)}
           />
+
+          {/* What belongs to the structure rather than to any one leg. One row
+              of six, instead of the same six repeated on four cards. */}
+          <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Structure</p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+              <Field label="Entry Date"><input type="date" {...shared("entry_date")} className={barInput} /></Field>
+              <Field label="Investment"><input type="number" step="any" {...shared("investment")} className={barInput} /></Field>
+              <Field label="Fut Qty"><input type="number" step="any" {...shared("fut_qty")} className={barInput} /></Field>
+              <Field label="Fut Entry Price"><input type="number" step="any" {...shared("fut_entry_price")} className={barInput} /></Field>
+              <Field label="Upside Distance"><input type="number" step="any" {...shared("upside_distance")} className={barInput} /></Field>
+              <Field label="Down Distance"><input type="number" step="any" {...shared("down_distance")} className={barInput} /></Field>
+            </div>
+          </div>
+
+          {/* Closing out. These are what a structure actually finished on
+              rather than what it was projected to make, so they are entered
+              rather than derived. */}
+          <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">On close</p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+              <Field label="Status">
+                <select {...shared("status")} className={barInput}>
+                  <option value="open">Open</option>
+                  <option value="closed">Closed</option>
+                </select>
+              </Field>
+              <Field label="End Date"><input type="date" {...shared("end_date")} className={barInput} /></Field>
+              <Field label="Options PnL"><input type="number" step="any" {...shared("opt_pnl")} className={barInput} /></Field>
+              <Field label="Futures PnL"><input type="number" step="any" {...shared("fut_pnl")} className={barInput} /></Field>
+              <Field label="Booked PnL"><input type="number" step="any" {...shared("net_booked_pnl")} className={barInput} /></Field>
+            </div>
+          </div>
         </div>
 
         {/* ── Leg cards ──
-            Leg 1 carries the whole structure and keeps every field; the rest
-            are compact and stack beside it. Two independent columns rather
-            than grid row-spans: grid rows share heights, so a tall Leg 1 would
-            push gaps in between the short cards next to it. */}
-        <div className="flex flex-col xl:flex-row xl:items-start gap-6">
+            Everything needed day to day is in the table above now, so these
+            start folded away. They are not deleted: they hold the per-leg
+            refresh, breakeven and theta, and "Refresh Live (All Legs)" drives
+            them through refs -- unmount them and that button silently stops
+            working. Folded, they cost a line instead of a screen. */}
+        <button type="button" onClick={() => setCardsOpen((o) => !o)}
+          className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+          <span className="text-slate-400">{cardsOpen ? "▾" : "▸"}</span>
+          Leg cards ({legs.length})
+          <span className="font-normal text-slate-400">— per-leg refresh, breakeven, theta</span>
+        </button>
+
+        <div className={`flex flex-col xl:flex-row xl:items-start gap-6 ${cardsOpen ? "" : "hidden"}`}>
           {(() => {
             const renderLeg = (idx) => {
               const leg = legs[idx];

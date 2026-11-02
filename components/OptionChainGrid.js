@@ -15,79 +15,69 @@ const fmtPx = (v) => {
 };
 const fmtIv = (v) => (v === null || v === undefined ? "—" : `${(v * 100).toFixed(2)}%`);
 const fmtDelta = (v) => (v === null || v === undefined ? "—" : v.toFixed(2));
-const fmtInt = (v) => (v === null || v === undefined ? "—" : Math.round(v).toLocaleString());
-const fmtDist = (v) => (v === null || v === undefined ? "—" : v.toFixed(2));
 
-const SIDES = { BID: "SHORT", ASK: "LONG" };
-
-/* ── one half of a bid × ask cell ─────────────────────────── */
+/* ── the two prices, and the premium under them ───────────── */
 
 /**
- * Clicking a price is an order, so the two halves are separate buttons: the
- * bid is where you sell and the ask is where you buy, and a cell that took one
- * click for both would make the difference a mode rather than a place.
+ * Bid and ask sit apart, each its own target, with the premium centred
+ * underneath. They were one cramped "bid × ask" before, which made the pair
+ * hard to hit and hard to read as two different things: the bid is where you
+ * sell and the ask is where you buy.
  *
- * Selected, they take the colour of what they did -- green for the side sold,
- * red for the side bought -- rather than one highlight for "chosen", which
- * would leave the two legs of a spread looking identical.
+ * They carry their colours all the time, not only once chosen -- green for the
+ * side you sell at, red for the side you buy at -- so the chain reads the same
+ * way whether or not anything is selected. Picking one fills it in.
  */
-function PriceHalf({ value, kind, selected, disabled, onPick, title }) {
-  const tone = selected
-    ? (kind === "BID"
-        ? "bg-emerald-100 text-emerald-800 font-bold ring-1 ring-emerald-400"
-        : "bg-red-100 text-red-800 font-bold ring-1 ring-red-400")
-    : "hover:bg-slate-100 text-slate-600";
+function PriceCell({ side, optType, strike, expiry, pickedOf, onPick }) {
+  const s = side || {};
+  const half = (kind, value, dir) => {
+    const on = pickedOf(optType, dir, strike);
+    const tone = kind === "BID"
+      ? (on ? "bg-emerald-100 text-emerald-800 font-bold ring-1 ring-emerald-400" : "text-emerald-600 hover:bg-emerald-50")
+      : (on ? "bg-red-100 text-red-800 font-bold ring-1 ring-red-400" : "text-red-600 hover:bg-red-50");
+    return (
+      <button
+        type="button"
+        title={`${kind === "BID" ? "Sell" : "Buy"} ${optType.toLowerCase()} ${strike} at the ${kind.toLowerCase()}`}
+        disabled={value === null || value === undefined}
+        onClick={() => onPick({ optType, side: dir, strike, expiry, price: value, iv: s.iv })}
+        className={`w-[58px] rounded px-1.5 py-0.5 text-center font-semibold tabular-nums transition-colors disabled:cursor-default disabled:text-slate-300 disabled:hover:bg-transparent ${tone}`}
+      >
+        {fmtPx(value)}
+      </button>
+    );
+  };
+
   return (
-    <button
-      type="button"
-      title={title}
-      disabled={disabled || value === null || value === undefined}
-      onClick={onPick}
-      className={`w-[52px] rounded px-1 py-0.5 text-right tabular-nums transition-colors disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent ${tone}`}
-    >
-      {fmtPx(value)}
-    </button>
+    <td className="px-2 py-1 align-middle">
+      <div className="flex flex-col items-center gap-0.5">
+        <div className="flex items-center gap-3">
+          {half("BID", s.bid, "SHORT")}
+          {half("ASK", s.ask, "LONG")}
+        </div>
+        {/* The premium those two sides imply, directly under them. */}
+        <span className="text-[10px] tabular-nums text-slate-400">{fmtPx(s.theor)}</span>
+      </div>
+    </td>
   );
 }
 
 /* ── one side of one strike ───────────────────────────────── */
 
-function SideCells({ side, optType, strike, expiry, mirrored, pickedOf, onPick, dense }) {
+function SideCells({ side, optType, strike, expiry, mirrored, pickedOf, onPick }) {
   const s = side || {};
-  const sel = (kind) => pickedOf(optType, SIDES[kind], strike);
-
-  const price = (
-    <td key="price" className="px-1 py-0.5 whitespace-nowrap">
-      <span className="inline-flex items-center gap-0.5">
-        <PriceHalf value={s.bid} kind="BID" selected={sel("BID")}
-          title={`Sell ${optType.toLowerCase()} ${strike} at the bid`}
-          onPick={() => onPick({ optType, side: "SHORT", strike, expiry, price: s.bid, iv: s.iv })} />
-        <span className="text-[10px] text-slate-300">×</span>
-        <PriceHalf value={s.ask} kind="ASK" selected={sel("ASK")}
-          title={`Buy ${optType.toLowerCase()} ${strike} at the ask`}
-          onPick={() => onPick({ optType, side: "LONG", strike, expiry, price: s.ask, iv: s.iv })} />
-      </span>
-    </td>
-  );
-
-  const cell = (k, v, extra = "") => (
-    <td key={k} className={`px-2 py-0.5 text-right tabular-nums text-slate-500 ${extra}`}>{v}</td>
+  const cell = (k, v) => (
+    <td key={k} className="px-2 py-1 text-right tabular-nums text-slate-500">{v}</td>
   );
   const by = {
     delta: cell("delta", fmtDelta(s.delta)),
     be: cell("be", fmtPx(s.be)),
     iv: cell("iv", fmtIv(s.iv)),
-    theor: cell("theor", fmtPx(s.theor), "font-semibold text-slate-700"),
-    price,
-    dist: cell("dist", fmtDist(s.distance)),
-    vol: cell("vol", fmtInt(s.volume)),
-    oi: cell("oi", fmtInt(s.oi)),
+    price: <PriceCell key="price" side={side} optType={optType} strike={strike}
+      expiry={expiry} pickedOf={pickedOf} onPick={onPick} />,
   };
-
   // The puts read outward from the strike, so their columns run the other way.
-  const order = mirrored
-    ? ["oi", "vol", "dist", "price", "theor", "iv", "be", "delta"]
-    : ["delta", "be", "iv", "theor", "price", "dist", "vol", "oi"];
+  const order = mirrored ? ["price", "iv", "be", "delta"] : ["delta", "be", "iv", "price"];
   return <>{order.map((k) => by[k])}</>;
 }
 
@@ -100,15 +90,22 @@ const WINDOWS = [
   { n: 0, label: "All strikes" },
 ];
 
+const COLS_PER_SIDE = 4;
+
 /**
  * An option chain that can be clicked into a strategy.
  *
- * @param picked      [{ optType, side, strike, expiry }] already in the structure
- * @param onPick      called with a contract when a price is clicked
- * @param expiries    [{ date, label }] for the dropdown
+ * @param tokenControl the coin picker, rendered beside the expiry. Passed in
+ *                     rather than built here: the page already owns one that
+ *                     knows how to search symbols per venue.
+ * @param picked       [{ optType, side, strike, expiry }] already in the structure
+ * @param onPick       called with a contract when a price is clicked
+ * @param onQuotes     called with each poll's payload, so the page can read
+ *                     IVs and premiums off the same quotes the grid is showing
  */
 export default function OptionChainGrid({
-  accountId, token, expiry, expiries = [], onExpiryChange, picked = [], onPick, pollMs = 2000,
+  accountId, token, expiry, expiries = [], onExpiryChange, tokenControl,
+  picked = [], onPick, onQuotes, pollMs = 2000,
 }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
@@ -139,7 +136,7 @@ export default function OptionChainGrid({
         const j = await res.json();
         if (stopped) return;
         if (j.error) { setErr(j.error); if (!j.rows?.length) setData(null); }
-        else { setErr(null); setData(j); }
+        else { setErr(null); setData(j); onQuotes?.(j); }
       } catch (e) {
         if (!stopped) setErr(e.message);
       } finally {
@@ -150,9 +147,11 @@ export default function OptionChainGrid({
     poll();
     const t = setInterval(poll, pollMs);
     return () => { stopped = true; clearInterval(t); };
+    // onQuotes deliberately absent from the deps: a parent that rebuilds the
+    // callback each render would otherwise restart the poll every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canLoad, key, pollMs]);
 
-  // Rows carry their own distance already; the window is taken around spot.
   const rows = useMemo(
     () => windowRows(data?.rows || [], data?.underlying, win),
     [data, win]);
@@ -164,9 +163,9 @@ export default function OptionChainGrid({
       && Number(p.strike) === Number(strike) && p.expiry === expiry),
     [picked, expiry]);
 
-  const cols = show === "both" ? 17 : 9;
   const showCalls = show !== "puts";
   const showPuts = show !== "calls";
+  const cols = 1 + (showCalls ? COLS_PER_SIDE : 0) + (showPuts ? COLS_PER_SIDE : 0);
 
   const stale = useMemo(() => {
     if (!data?.quoteAt) return null;
@@ -176,14 +175,6 @@ export default function OptionChainGrid({
     return age > 10 * 60 * 1000 ? data.quoteAt : null;
   }, [data]);
 
-  if (!canLoad) {
-    return (
-      <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 text-xs text-slate-400">
-        Pick an account, a token and an expiry to load the chain.
-      </div>
-    );
-  }
-
   const h = (side) => (label, extra = "") => (
     <th key={`${side}-${label}`}
       className={`px-2 py-1 text-right text-[10px] font-semibold uppercase tracking-wide text-slate-400 ${extra}`}>
@@ -191,16 +182,19 @@ export default function OptionChainGrid({
     </th>
   );
   const hc = h("c"), hp = h("p");
-  const callHeads = [hc("Delta"), hc("BE"), hc("IV"), hc("Theor"), hc("Bid × Ask", "text-center"), hc("Distance"), hc("Volume"), hc("Open int")];
-  const putHeads = [hp("Open int"), hp("Volume"), hp("Distance"), hp("Bid × Ask", "text-center"), hp("Theor"), hp("IV"), hp("BE"), hp("Delta")];
+  const callHeads = [hc("Delta"), hc("BE"), hc("IV"), hc("Bid · Ask", "text-center")];
+  const putHeads = [hp("Bid · Ask", "text-center"), hp("IV"), hp("BE"), hp("Delta")];
 
   return (
     <div className="rounded-xl border border-slate-100 bg-slate-50">
-      {/* Controls */}
+      {/* Controls. Coin and expiry sit together, because picking one almost
+          always means picking the other. */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-3 py-2">
+        {tokenControl && <div className="w-44">{tokenControl}</div>}
+
         <select value={expiry || ""} onChange={(e) => onExpiryChange?.(e.target.value)}
           className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700">
-          {!expiries.length && <option value={expiry}>{expiry}</option>}
+          {!expiries.length && <option value={expiry}>{expiry || "— expiry —"}</option>}
           {expiries.map((e) => <option key={e.date} value={e.date}>{e.label || e.date}</option>)}
         </select>
 
@@ -241,63 +235,71 @@ export default function OptionChainGrid({
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px] border-collapse text-xs">
-          <thead>
-            <tr className="border-b border-slate-100">
-              {showCalls && <th colSpan={8} className="py-1 text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">Calls</th>}
-              <th className="py-1" />
-              {showPuts && <th colSpan={8} className="py-1 text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">Puts</th>}
-            </tr>
-            <tr className="border-b border-slate-200">
-              {showCalls && callHeads}
-              <th className="px-2 py-1 text-center text-[10px] font-semibold uppercase tracking-wide text-slate-500">Strike</th>
-              {showPuts && putHeads}
-            </tr>
-          </thead>
-          <tbody>
-            <tr className="bg-slate-100/70">
-              <td colSpan={cols} className="px-2 py-1">
-                <button type="button" onClick={() => setOpen((o) => !o)}
-                  className="flex items-center gap-2 text-[11px] font-bold text-slate-600">
-                  <span className="text-slate-400">{open ? "▾" : "▸"}</span>
-                  {data?.expiry ? new Date(`${data.expiry}T00:00:00Z`).toLocaleDateString(undefined, { month: "long", day: "numeric", timeZone: "UTC" }) : expiry}
-                  {data?.dte !== null && data?.dte !== undefined && (
-                    <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">{data.dte} DTE</span>
-                  )}
-                </button>
-              </td>
-            </tr>
+      {!canLoad ? (
+        <div className="px-4 py-6 text-center text-xs text-slate-400">
+          Pick an account, a coin and an expiry to load the chain.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] border-collapse text-xs">
+            <thead>
+              <tr className="border-b border-slate-100">
+                {showCalls && <th colSpan={COLS_PER_SIDE} className="py-1 text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">Calls</th>}
+                <th className="py-1" />
+                {showPuts && <th colSpan={COLS_PER_SIDE} className="py-1 text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">Puts</th>}
+              </tr>
+              <tr className="border-b border-slate-200">
+                {showCalls && callHeads}
+                <th className="px-2 py-1 text-center text-[10px] font-semibold uppercase tracking-wide text-slate-500">Strike</th>
+                {showPuts && putHeads}
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="bg-slate-100">
+                <td colSpan={cols} className="px-2 py-1">
+                  <button type="button" onClick={() => setOpen((o) => !o)}
+                    className="flex items-center gap-2 text-[11px] font-bold text-slate-600">
+                    <span className="text-slate-400">{open ? "▾" : "▸"}</span>
+                    {data?.expiry
+                      ? new Date(`${data.expiry}T00:00:00Z`).toLocaleDateString(undefined, { month: "long", day: "numeric", timeZone: "UTC" })
+                      : expiry}
+                    {data?.dte !== null && data?.dte !== undefined && (
+                      <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">{data.dte} DTE</span>
+                    )}
+                  </button>
+                </td>
+              </tr>
 
-            {open && rows.map((r, i) => (
-              <Fragment key={r.strike}>
+              {open && rows.map((r, i) => (
+                <Fragment key={r.strike}>
                   {i === spotAt && data?.underlying != null && <SpotBand cols={cols} token={data.token} price={data.underlying} />}
                   <tr className="border-b border-slate-100 last:border-0 hover:bg-slate-100">
                     {showCalls && (
-                      <SideCells side={r.call && { ...r.call, distance: r.distance }} optType="CALL" strike={r.strike}
+                      <SideCells side={r.call} optType="CALL" strike={r.strike}
                         expiry={expiry} pickedOf={pickedOf} onPick={onPick} />
                     )}
-                    <td className="px-2 py-0.5 text-center font-bold tabular-nums text-slate-700">{r.strike}</td>
+                    <td className="px-2 py-1 text-center font-bold tabular-nums text-slate-700">{r.strike}</td>
                     {showPuts && (
-                      <SideCells side={r.put && { ...r.put, distance: r.distance }} optType="PUT" strike={r.strike}
+                      <SideCells side={r.put} optType="PUT" strike={r.strike}
                         expiry={expiry} mirrored pickedOf={pickedOf} onPick={onPick} />
                     )}
                   </tr>
-              </Fragment>
-            ))}
+                </Fragment>
+              ))}
 
-            {open && spotAt === rows.length && data?.underlying != null && (
-              <SpotBand cols={cols} token={data.token} price={data.underlying} />
-            )}
+              {open && spotAt === rows.length && data?.underlying != null && (
+                <SpotBand cols={cols} token={data.token} price={data.underlying} />
+              )}
 
-            {open && !rows.length && !loading && (
-              <tr><td colSpan={cols} className="px-3 py-4 text-center text-xs text-slate-400">
-                No strikes listed for this expiry.
-              </td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+              {open && !rows.length && !loading && (
+                <tr><td colSpan={cols} className="px-3 py-4 text-center text-xs text-slate-400">
+                  No strikes listed for this expiry.
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
