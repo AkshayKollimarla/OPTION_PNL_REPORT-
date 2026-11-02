@@ -85,6 +85,10 @@ body {
 .dark .hover\:bg-slate-50:hover,
 .dark .hover\:bg-slate-50\/60:hover,
 .dark .hover\:bg-slate-50\/80:hover { background-color: var(--surface-3); }
+/* A hover variant is its own class: the rule for .bg-slate-100 above does not
+   reach .hover\:bg-slate-100:hover, which left a hovered chain row flashing
+   near-white on a dark page. */
+.dark .hover\:bg-slate-100:hover { background-color: #22304d; }
 
 .dark .bg-slate-100,
 .dark .bg-slate-100\/60,

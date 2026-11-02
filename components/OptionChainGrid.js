@@ -41,7 +41,7 @@ function PriceCell({ side, optType, strike, expiry, pickedOf, onPick }) {
         title={`${kind === "BID" ? "Sell" : "Buy"} ${optType.toLowerCase()} ${strike} at the ${kind.toLowerCase()}`}
         disabled={value === null || value === undefined}
         onClick={() => onPick({ optType, side: dir, strike, expiry, price: value, iv: s.iv })}
-        className={`w-[58px] rounded px-1.5 py-0.5 text-center font-semibold tabular-nums transition-colors disabled:cursor-default disabled:text-slate-300 disabled:hover:bg-transparent ${tone}`}
+        className={`${PRICE_W} rounded px-1.5 py-0.5 text-center text-[13px] font-semibold tabular-nums transition-colors disabled:cursor-default disabled:text-slate-300 disabled:hover:bg-transparent ${tone}`}
       >
         {fmtPx(value)}
       </button>
@@ -51,12 +51,12 @@ function PriceCell({ side, optType, strike, expiry, pickedOf, onPick }) {
   return (
     <td className="px-2 py-1 align-middle">
       <div className="flex flex-col items-center gap-0.5">
-        <div className="flex items-center gap-3">
+        <div className={`flex items-center ${PRICE_GAP}`}>
           {half("BID", s.bid, "SHORT")}
           {half("ASK", s.ask, "LONG")}
         </div>
         {/* The premium those two sides imply, directly under them. */}
-        <span className="text-[10px] tabular-nums text-slate-400">{fmtPx(s.theor)}</span>
+        <span className="text-[11px] tabular-nums text-slate-500">{fmtPx(s.theor)}</span>
       </div>
     </td>
   );
@@ -67,7 +67,7 @@ function PriceCell({ side, optType, strike, expiry, pickedOf, onPick }) {
 function SideCells({ side, optType, strike, expiry, mirrored, pickedOf, onPick }) {
   const s = side || {};
   const cell = (k, v) => (
-    <td key={k} className="px-2 py-1 text-right tabular-nums text-slate-500">{v}</td>
+    <td key={k} className="px-2 py-1 text-right tabular-nums text-slate-600">{v}</td>
   );
   const by = {
     delta: cell("delta", fmtDelta(s.delta)),
@@ -91,6 +91,10 @@ const WINDOWS = [
 ];
 
 const COLS_PER_SIDE = 4;
+
+// One number drives the price buttons and the BID / ASK labels above them.
+const PRICE_W = "w-[62px]";
+const PRICE_GAP = "gap-3";
 
 /**
  * An option chain that can be clicked into a strategy.
@@ -175,15 +179,23 @@ export default function OptionChainGrid({
     return age > 10 * 60 * 1000 ? data.quoteAt : null;
   }, [data]);
 
-  const h = (side) => (label, extra = "") => (
+  const h = (side) => (label) => (
     <th key={`${side}-${label}`}
-      className={`px-2 py-1 text-right text-[10px] font-semibold uppercase tracking-wide text-slate-400 ${extra}`}>
+      className="px-2 py-1 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-600">
       {label}
     </th>
   );
+  const priceHead = (side) => (
+    <th key={`${side}-price`} className="px-2 py-1">
+      <div className={`flex items-center justify-center ${PRICE_GAP}`}>
+        <span className={`${PRICE_W} text-center text-[11px] font-semibold uppercase tracking-wide text-emerald-600`}>Bid</span>
+        <span className={`${PRICE_W} text-center text-[11px] font-semibold uppercase tracking-wide text-red-600`}>Ask</span>
+      </div>
+    </th>
+  );
   const hc = h("c"), hp = h("p");
-  const callHeads = [hc("Delta"), hc("BE"), hc("IV"), hc("Bid · Ask", "text-center")];
-  const putHeads = [hp("Bid · Ask", "text-center"), hp("IV"), hp("BE"), hp("Delta")];
+  const callHeads = [hc("Delta"), hc("BE"), hc("IV"), priceHead("c")];
+  const putHeads = [priceHead("p"), hp("IV"), hp("BE"), hp("Delta")];
 
   return (
     <div className="rounded-xl border border-slate-100 bg-slate-50">
@@ -241,16 +253,16 @@ export default function OptionChainGrid({
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[560px] border-collapse text-xs">
+          <table className="w-full min-w-[620px] border-collapse text-[13px]">
             <thead>
               <tr className="border-b border-slate-100">
-                {showCalls && <th colSpan={COLS_PER_SIDE} className="py-1 text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">Calls</th>}
+                {showCalls && <th colSpan={COLS_PER_SIDE} className="py-1 text-center text-xs font-bold uppercase tracking-wide text-slate-700">Calls</th>}
                 <th className="py-1" />
-                {showPuts && <th colSpan={COLS_PER_SIDE} className="py-1 text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">Puts</th>}
+                {showPuts && <th colSpan={COLS_PER_SIDE} className="py-1 text-center text-xs font-bold uppercase tracking-wide text-slate-700">Puts</th>}
               </tr>
               <tr className="border-b border-slate-200">
                 {showCalls && callHeads}
-                <th className="px-2 py-1 text-center text-[10px] font-semibold uppercase tracking-wide text-slate-500">Strike</th>
+                <th className="px-2 py-1 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-700">Strike</th>
                 {showPuts && putHeads}
               </tr>
             </thead>
@@ -278,7 +290,7 @@ export default function OptionChainGrid({
                       <SideCells side={r.call} optType="CALL" strike={r.strike}
                         expiry={expiry} pickedOf={pickedOf} onPick={onPick} />
                     )}
-                    <td className="px-2 py-1 text-center font-bold tabular-nums text-slate-700">{r.strike}</td>
+                    <td className="px-2 py-1 text-center text-sm font-bold tabular-nums text-slate-800">{r.strike}</td>
                     {showPuts && (
                       <SideCells side={r.put} optType="PUT" strike={r.strike}
                         expiry={expiry} mirrored pickedOf={pickedOf} onPick={onPick} />

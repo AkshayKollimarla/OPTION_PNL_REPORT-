@@ -1,11 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, useCallback, Suspense, forwardRef, useImperativeHandle } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { computeDerived, strikeNumber } from "../../../lib/options-calculations";
 import { expiryPnl, currentPnl } from "../../../lib/black-scholes";
 import TokenSelect from "../../../components/TokenSelect";
-import { chainReloadAction, usMarketToday } from "../../../lib/chain-reload";
 import { DISTANCE_KEYS, distanceDecision } from "../../../lib/leg-distance";
 import { spreadPrices, livePnl, futuresPnl } from "../../../lib/spread-price";
 import { legKey } from "../../../lib/leg-key";
@@ -295,18 +294,64 @@ function SimulatorInner() {
   const [comboAutoCloseAfterEntry, setComboAutoCloseAfterEntry] = useState(false);
   const comboAcTimerRef = useRef(null);
 
-  // Refs to each LegCard's imperative refreshTicker(), so one button can
-  // refresh every leg's live entry price, IV, and futures price at once.
-  const legRefs = useRef([]);
   const [refreshingAll, setRefreshingAll] = useState(false);
+
+  /**
+   * Write the live market into every leg: option premium and IV from the
+   * chain, the underlying once for the whole structure.
+   *
+   * This used to reach into each card through a ref and ask it to refresh
+   * itself, which is why the cards had to stay mounted. The chain already
+   * holds the same quotes -- it is the poll the grid draws from -- so Refresh
+   * reads from there instead, and cannot disagree with the prices on screen.
+   *
+   * It overwrites a price that was clicked in the chain, deliberately:
+   * pressing Refresh is the one unambiguous request for the live mid.
+   */
   async function refreshAllLegs() {
     setRefreshingAll(true);
     try {
-      await Promise.all(legRefs.current.map(r => r?.refreshTicker?.()));
+      const futPromise = selectedAcct && chainTokenRef.current
+        ? fetch(`/api/market?account_id=${selectedAcct}&token=${encodeURIComponent(chainTokenRef.current)}&action=futures`)
+            .then((r) => r.json()).catch(() => null)
+        : Promise.resolve(null);
+
+      const picks = legsRef.current.map((l) => {
+        const [optType] = (l.type || "").split(" ");
+        const strike = strikeNumber(l.form.options_strike);
+        if (!(strike > 0) || !l.form.expiry) return null;
+        const q = quoteRef.current(optType, strike, l.form.expiry);
+        if (q) return { price: q.theor, iv: q.iv };
+        // A leg on an expiry the chain is not showing still has a live mid in
+        // the per-leg feed, but no IV with it.
+        const mid = liveMidsRef.current?.[legKey({ token: l.form.token, expiry: l.form.expiry, strike, optType })]?.mid;
+        return mid === undefined || mid === null ? null : { price: mid, iv: null };
+      });
+
+      const futJson = await futPromise;
+      const fut = Number(futJson?.mark_price) || null;
+
+      setLegs((prev) => prev.map((l, i) => {
+        const u = picks[i];
+        if (!u && !fut) return l;
+        const form = { ...l.form };
+        if (u?.price !== null && u?.price !== undefined) form.opt_entry_price = String(u.price);
+        if (u?.iv !== null && u?.iv !== undefined) form.iv = String(Math.round(u.iv * 1000) / 10);
+        if (fut) form.fut_entry_price = String(fut);
+        return { ...l, form };
+      }));
     } finally {
       setRefreshingAll(false);
     }
   }
+
+  // Refresh is called from a click, so it reads these through refs rather
+  // than closing over the values this render happened to have.
+  const legsRef = useRef(legs);
+  legsRef.current = legs;
+  const liveMidsRef = useRef(null);
+  const quoteRef = useRef(() => null);
+  const chainTokenRef = useRef("");
 
   const deriveds = useMemo(() => legs.map((l) => computeDerived(l.form)), [legs]);
 
@@ -586,7 +631,6 @@ function SimulatorInner() {
      being a control of its own. */
   const chainToken = legs[masterLegIdx]?.form.token || legs[0]?.form.token || "";
   const [chainExpiry, setChainExpiry] = useState("");
-  const [cardsOpen, setCardsOpen] = useState(false);
   const [chainExpiries, setChainExpiries] = useState([]);
 
   useEffect(() => {
@@ -626,10 +670,9 @@ function SimulatorInner() {
     return (optType === "CALL" ? row?.call : row?.put) || null;
   }, [chainQuotes]);
 
-  // Which contract a clicked price belongs to. Compared against what a leg
-  // currently shows, so re-picking the strike by hand ends the claim without
-  // anything having to clear it.
-  const contractKey = (optType, strike, expiry) => `${expiry}|${Number(strike)}|${String(optType).toUpperCase()}`;
+  chainTokenRef.current = chainToken;
+  quoteRef.current = (optType, strike, expiry) =>
+    (chainQuotes?.expiry === expiry ? quoteOf(optType, strike) : null);
 
   const picked = useMemo(() => legs.map((l) => {
     const [optType, side] = (l.type || "").split(" ");
@@ -664,7 +707,6 @@ function SimulatorInner() {
         const qty = hasQty ? l.form.opt_entry_qty : (side === "SHORT" ? "-1" : "1");
         return {
           ...l,
-          priceFromChain: price === null || price === undefined ? null : contractKey(optType, strike, expiry),
           form: {
             ...l.form,
             token: chainToken || l.form.token,
@@ -699,6 +741,7 @@ function SimulatorInner() {
   const [liveFut, setLiveFut] = useState(null);
   const [liveAt, setLiveAt] = useState(null);
   const [liveErr, setLiveErr] = useState(null);
+  liveMidsRef.current = liveMids;
 
   // The strip under the chain: one line per leg, with the live mid it is
   // being marked against.
@@ -2029,75 +2072,6 @@ function SimulatorInner() {
           </div>
         </div>
 
-        {/* ── Leg cards ──
-            Everything needed day to day is in the table above now, so these
-            start folded away. They are not deleted: they hold the per-leg
-            refresh, breakeven and theta, and "Refresh Live (All Legs)" drives
-            them through refs -- unmount them and that button silently stops
-            working. Folded, they cost a line instead of a screen. */}
-        <button type="button" onClick={() => setCardsOpen((o) => !o)}
-          className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
-          <span className="text-slate-400">{cardsOpen ? "▾" : "▸"}</span>
-          Leg cards ({legs.length})
-          <span className="font-normal text-slate-400">— per-leg refresh, breakeven, theta</span>
-        </button>
-
-        <div className={`flex flex-col xl:flex-row xl:items-start gap-6 ${cardsOpen ? "" : "hidden"}`}>
-          {(() => {
-            const renderLeg = (idx) => {
-              const leg = legs[idx];
-              return (
-                <LegCard
-                  key={idx}
-                  ref={el => { legRefs.current[idx] = el; }}
-                  label={`Leg ${idx + 1}`}
-                  legType={leg.type}
-                  onLegTypeChange={(t) => changeLegType(idx, t)}
-                  form={leg.form}
-                  set={(k, v, opts) => setLegField(idx, k, v, opts)}
-                  setBulk={(updates) => setLegBulk(idx, updates)}
-                  // Bound to the FIRST card, whichever card calls it: the
-                  // futures price is one price for the whole structure, so it
-                  // is written where the other legs follow it from.
-                  setSharedField={(key, value) => setLegField(masterLegIdx, key, value)}
-                  isSyncMaster={idx === masterLegIdx}
-                  syncOverrides={leg.overrides || {}}
-                  onRelinkField={(k) => relinkLegField(idx, k)}
-                  derived={deriveds[idx] || {}}
-                  canRemove={legs.length > 2}
-                  onRemove={() => removeLeg(idx)}
-                  accountId={selectedAcct}
-                  compact={idx !== masterLegIdx}
-                  masterForm={legs[masterLegIdx]?.form || null}
-                  syncedKeys={SYNCED_KEYS}
-                  priceFromChain={leg.priceFromChain || null}
-                />
-              );
-            };
-            return (
-              <>
-                <div className="w-full xl:flex-1 min-w-0">
-                  {legs[masterLegIdx] && renderLeg(masterLegIdx)}
-                </div>
-                <div className="w-full xl:flex-1 min-w-0 flex flex-col gap-6">
-                  {legDisplayOrder.filter((idx) => idx !== masterLegIdx).map(renderLeg)}
-
-          {/* Add Leg card */}
-          <button onClick={addLeg}
-            className="rounded-xl border-2 border-dashed border-teal-200 bg-white hover:border-teal-400 hover:bg-teal-50 transition-colors flex flex-col items-center justify-center gap-3 p-10 min-h-[120px]">
-            <span className="h-12 w-12 rounded-full bg-teal-100 flex items-center justify-center">
-              <svg className="h-6 w-6 text-teal-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M12 5v14M5 12h14" strokeLinecap="round"/>
-              </svg>
-            </span>
-            <span className="text-sm font-semibold text-teal-700">Add Leg {legs.length + 1}</span>
-          </button>
-                </div>
-              </>
-            );
-          })()}
-        </div>
-
         {/* ── Combined Net PnL ── */}
         <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="mb-5 text-base font-bold text-slate-800">
@@ -2330,560 +2304,10 @@ export default function CombinedSimulator() {
 
 /* ── Leg Card ─────────────────────────────────────────── */
 
-const LegCard = forwardRef(function LegCard({ label, legType, onLegTypeChange, form, set, setBulk, setSharedField, derived, canRemove, onRemove, accountId, isSyncMaster = false, syncOverrides = {}, onRelinkField, compact = false, masterForm = null, syncedKeys = [], priceFromChain = null }, ref) {
-  const inp   = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none";
-  const style = LEG_STYLES[legType];
-
-  // Label for a field that follows the first card: marks the source, and on a
-  // follower that was edited directly shows it's gone custom with a way back.
-  const isOverridden = (key) => !isSyncMaster && !!syncOverrides[key];
-  const syncLabel = (key, title) => (
-    <span className="flex items-center gap-1.5">
-      {title}
-      {isSyncMaster && <span className="text-[10px] font-normal text-blue-600">applies to all legs</span>}
-      {isOverridden(key) && (
-        <>
-          <span className="text-[10px] font-normal text-amber-600">custom</span>
-          <button
-            type="button"
-            onClick={() => onRelinkField?.(key)}
-            title="Follow the first leg's value again"
-            className="text-[10px] text-slate-400 hover:text-blue-600 underline"
-          >
-            re-link
-          </button>
-        </>
-      )}
-    </span>
-  );
-  const syncCls = (key) => (isOverridden(key) ? "border-amber-300 bg-amber-50" : "");
-
-  // Compact cards (every leg after the first) show only what genuinely differs
-  // per leg — strike, quantity, entry and exit price, IV. Everything else is
-  // either copied from Leg 1 or recorded once for the whole structure.
-  //
-  // A field is hidden only while it carries nothing of its own. Saved
-  // strategies do NOT keep their once-per-structure values on Leg 1: across
-  // the book the futures hedge sits on legs 2-4 in over half of them, and the
-  // same goes for booked PnL, basket loss and investment. Hiding those outright
-  // would bury values that still drive the totals — and, for Fut Qty, still
-  // place a hedge on Execute — with no way to see or change them.
-  const [showDetails, setShowDetails] = useState(false);
-  const PER_LEG_KEYS = ["options_strike", "opt_entry_qty", "opt_entry_price", "opt_exit_price", "iv"];
-  const hasOwnValue = (v) => {
-    if (v === "" || v == null) return false;
-    const num = Number(v);
-    // A zero adds nothing to any total and places no hedge, so hiding it
-    // cannot hide an effect.
-    return !(String(v).trim() !== "" && Number.isFinite(num) && num === 0);
-  };
-  const sameValue = (a, b) => {
-    const na = Number(a), nb = Number(b);
-    if (a !== "" && b !== "" && a != null && b != null && Number.isFinite(na) && Number.isFinite(nb)) return na === nb;
-    return String(a ?? "") === String(b ?? "");
-  };
-  const show = (key) => {
-    if (!compact || PER_LEG_KEYS.includes(key)) return true;
-    // The futures instrument only means something once this leg has a hedge.
-    if (key === "fut_instrument_type") return hasOwnValue(form.fut_qty);
-    // A value that follows Leg 1 stays hidden while it matches; a custom or
-    // diverging one is shown, so the leg never silently runs on other terms.
-    if (syncedKeys.includes(key)) return isOverridden(key) || !sameValue(form[key], masterForm?.[key]);
-    return hasOwnValue(form[key]);
-  };
-
-  // Per-leg live data state
-  const [liveExpiries,   setLiveExpiries]   = useState([]);
-  const [loadingChain,   setLoadingChain]   = useState(false);
-  const [chainError,     setChainError]     = useState(null);
-  const [tickerInfo,     setTickerInfo]     = useState(null);
-  const [fetchingTicker, setFetchingTicker] = useState(false);
-  // Why the last refresh returned no price, shown beside the button.
-  const [tickerError,    setTickerError]    = useState(null);
-  // Which feed the underlying price came from, and how far behind it is. A
-  // delayed price is usable but must say so.
-  const [futInfo,        setFutInfo]        = useState(null);
-  const chainTimerRef = useRef(null);
-  // When true, saved DB values are preserved — auto-populating from live data won't overwrite them.
-  // Set when form is loaded from DB (token changes from empty → value with saved data).
-  // Cleared when user explicitly changes expiry, strike, or token.
-  const preserveRef  = useRef(false);
-  // The token this card's option chain was last loaded for, to tell a token
-  // switch apart from an ordinary chain reload.
-  const chainTokenRef = useRef("");
-  const prevTokenRef = useRef("");
-  // Net Booked PnL = Futures PnL + Options PnL + Market Making PL — always
-  // derived, never typed directly. Recomputes whenever any of the three
-  // inputs change; stays blank until at least one of them has a value.
-  useEffect(() => {
-    const { fut_pnl, opt_pnl } = form;
-    if (fut_pnl === "" && opt_pnl === "") {
-      if (form.net_booked_pnl !== "") setBulk({ net_booked_pnl: "" });
-      return;
-    }
-    const n = (v) => (v === "" || v == null ? 0 : Number(v) || 0);
-    const computed = n(fut_pnl) + n(opt_pnl);
-    if (String(computed) !== String(form.net_booked_pnl)) setBulk({ net_booked_pnl: computed });
-  }, [form.fut_pnl, form.opt_pnl]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Detect DB load: token changed from empty → saved value that already has expiry/price data.
-  useEffect(() => {
-    const wasEmpty = !prevTokenRef.current;
-    const hasData  = !!(form.token && form.expiry && (form.opt_entry_price || form.fut_entry_price));
-    if (wasEmpty && hasData) preserveRef.current = true;
-    prevTokenRef.current = form.token;
-  }, [form.token]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Fetch chain when account + token changes
-  useEffect(() => {
-    clearTimeout(chainTimerRef.current);
-    if (!accountId || !form.token || form.token.trim().length < 2) {
-      setLiveExpiries([]); setTickerInfo(null); setChainError(null); return;
-    }
-    const token = form.token.trim().toUpperCase();
-    chainTimerRef.current = setTimeout(async () => {
-      setLoadingChain(true); setLiveExpiries([]); setTickerInfo(null); setChainError(null);
-      try {
-        const res  = await fetch(`/api/market?account_id=${accountId}&token=${token}&action=chain`);
-        const data = await res.json();
-        if (!res.ok) { setChainError(data.error || `HTTP ${res.status}`); return; }
-        if (data.expiries?.length) {
-          setLiveExpiries(data.expiries);
-          const previousToken = chainTokenRef.current;
-          chainTokenRef.current = token;
-          // Saved expiry and strike stay as saved; see lib/chain-reload.js.
-          // Applied through setBulk, so it touches this card only.
-          const { pickExpiry, clearStrike } = chainReloadAction({
-            currentExpiry: form.expiry, listedExpiries: data.expiries, previousToken, token,
-          });
-          if (pickExpiry || clearStrike) {
-            setBulk({
-              ...(pickExpiry ? { expiry: data.expiries[0].date } : {}),
-              ...(clearStrike ? { options_strike: "" } : {}),
-            });
-          }
-          fetch(`/api/market?account_id=${accountId}&token=${token}&action=futures&instrument=${encodeURIComponent(buildFuturesInst(token, form.fut_instrument_type))}`)
-            .then(r => r.json())
-            .then(d => {
-              if (d.mark_price) {
-                // fut_mid_price is this leg's own execution helper. The entry
-                // price is not: see refreshTicker below for why it is written
-                // through the first card.
-                setBulk({ fut_mid_price: String(d.mid_price ?? d.mark_price) });
-                if (!preserveRef.current && isSyncMaster) {
-                  setSharedField?.("fut_entry_price", String(d.mark_price));
-                }
-              }
-            })
-            .catch(() => {});
-        } else {
-          setChainError(data.error || `No active options found for ${token} on Deribit`);
-        }
-      } catch (e) {
-        setChainError(e.message);
-      } finally { setLoadingChain(false); }
-    }, 700);
-    return () => clearTimeout(chainTimerRef.current);
-  }, [accountId, form.token]);
-
-  // Auto-fetch ticker when expiry/strike/option_type changes (live mode)
-  useEffect(() => {
-    if (!accountId || !liveExpiries.length || !form.options_strike || !form.expiry) return;
-    const token = (form.token || "ETH").toUpperCase();
-    const inst  = buildDeribitInst(token, form.expiry, form.options_strike, form.option_type);
-    if (!inst) return;
-    let cancelled = false;
-    setFetchingTicker(true); setTickerInfo(null); setTickerError(null);
-    fetch(`/api/market?account_id=${accountId}&token=${token}&action=ticker&instrument=${encodeURIComponent(inst)}`)
-      .then(r => r.json())
-      .then(data => {
-        if (cancelled || !data.mark_price_usd) return;
-        setTickerInfo({ ...data, instrument: inst });
-        // opt_mid_price_raw is an execution helper, not a saved field, so it
-        // always tracks the live market. IV and the entry price are saved
-        // columns and belong to the strategy, so they change only when Refresh
-        // is pressed — the one unambiguous request for live data. Changing the
-        // token, expiry or strike no longer refills them: re-picking contracts
-        // while editing used to overwrite a recorded entry price with the live
-        // mid (2.47 became 5.315 on an NBIS leg) before anyone asked for it.
-        const upd = { opt_mid_price_raw: String(data.mid_price_raw ?? data.mark_price_raw ?? "") };
-        // The same argument one step further on: a price clicked in the chain
-        // IS the entry -- the bid because it was sold there, the ask because
-        // it was bought there -- and refilling it with the venue's mark would
-        // quietly turn a chosen side into a midpoint. Only while the leg still
-        // shows that contract.
-        const chosenHere = priceFromChain
-          && priceFromChain === `${form.expiry}|${Number(strikeNumber(form.options_strike))}|${String(form.option_type || "").toUpperCase()}`;
-        if (!preserveRef.current && !chosenHere) {
-          upd.opt_entry_price = fmtOptPrice(data.mark_price_usd, data);
-          if (data.mark_iv != null) upd.iv = String(Math.round(data.mark_iv * 10) / 10);
-        }
-        setBulk(upd);
-      })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setFetchingTicker(false); });
-    return () => { cancelled = true; };
-  }, [form.expiry, form.options_strike, form.option_type, accountId, liveExpiries.length, priceFromChain]);
-
-  async function refreshTicker() {
-    preserveRef.current = false; // User explicitly asked for live price — always override
-    const token   = (form.token || "ETH").toUpperCase();
-    const inst    = buildDeribitInst(token, form.expiry, form.options_strike, form.option_type);
-    const futInst = buildFuturesInst(token, form.fut_instrument_type);
-    if (!accountId) return;
-    setFetchingTicker(true);
-    setTickerError(null);
-    try {
-      const [optRes, futRes] = await Promise.all([
-        inst ? fetch(`/api/market?account_id=${accountId}&token=${token}&action=ticker&instrument=${encodeURIComponent(inst)}`) : Promise.resolve(null),
-        fetch(`/api/market?account_id=${accountId}&token=${token}&action=futures&instrument=${encodeURIComponent(futInst)}`),
-      ]);
-      const [optData, futData] = await Promise.all([
-        optRes ? optRes.json() : Promise.resolve(null),
-        futRes.json(),
-      ]);
-
-      const update = {};
-      // Only a positive price is a price. A missing quote used to arrive as 0,
-      // which passed a "not null" test and was written over the saved entry
-      // price — refreshing an expired leg zeroed it.
-      if (optRes && optRes.ok && Number(optData?.mark_price_usd) > 0) {
-        setTickerInfo({ ...optData, instrument: inst });
-        update.opt_entry_price   = fmtOptPrice(optData.mark_price_usd, optData);
-        update.iv                = optData.mark_iv != null ? String(Math.round(optData.mark_iv * 10) / 10) : form.iv;
-        update.opt_mid_price_raw = String(optData.mid_price_raw ?? optData.mark_price_raw ?? "");
-      }
-      else if (inst) {
-        setTickerError(optData?.error || "No live quote returned for this option.");
-      }
-      if (futRes.ok && Number(futData?.mark_price) > 0) {
-        // One futures price for the whole structure, written on the first card
-        // and followed by the rest. Written per leg it drifted: each card
-        // fetched at its own moment, so refreshing leg 3 left it holding a
-        // futures price a few cents off leg 1's -- which the compact card then
-        // had to reveal, opening a Fut Entry Price field on a card that is
-        // meant to show five. A leg whose futures price was typed by hand is
-        // already marked as its own and still keeps it.
-        const futPrice = futData.exact_price
-          ? String(futData.mark_price)
-          : String(Math.round(futData.mark_price * 100) / 100);
-        if (isSyncMaster) setSharedField?.("fut_entry_price", futPrice);
-        update.fut_mid_price   = String(futData.mid_price ?? futData.mark_price ?? "");
-        setFutInfo(futData.feed ? { feed: futData.feed, delayed: futData.delayed_minutes } : null);
-      } else {
-        // The futures leg used to fail in silence: no price, no message, and a
-        // futures field that simply never moved however often Refresh was
-        // pressed. Whatever the venue says is now shown.
-        setFutInfo(null);
-        if (futData?.error) setTickerError((prev) => prev || futData.error);
-      }
-      if (Object.keys(update).length) setBulk(update);
-    } finally { setFetchingTicker(false); }
-  }
-
-  // Exposes this leg's own refresh to the parent, so a single "Refresh All
-  // Legs" button can trigger every card's live update without duplicating
-  // the fetch logic in the parent.
-  useImperativeHandle(ref, () => ({ refreshTicker }));
-
-  const liveExpiryObj = liveExpiries.find(e => e.date === form.expiry) || null;
-  const liveStrikes   = liveExpiryObj?.strikes || [];
-  const hasLiveData   = liveExpiries.length > 0;
-
-  return (
-    <div className="rounded-xl border border-slate-900 bg-white shadow-sm overflow-hidden">
-      <div className="flex items-center gap-3 px-5 py-3.5 border-b border-slate-100 bg-slate-50 flex-wrap">
-        <span className="text-sm font-bold text-slate-600">{label}</span>
-        <div className={`flex items-center gap-1.5 rounded-full border px-3 py-1 ${style.badge}`}>
-          <span className={`h-2 w-2 rounded-full ${style.dot}`} />
-          <select value={legType} onChange={(e) => onLegTypeChange(e.target.value)}
-            className="bg-transparent text-xs font-bold outline-none cursor-pointer">
-            {LEG_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
-          </select>
-        </div>
-        {hasLiveData && !loadingChain && (
-          <span className="rounded-full bg-emerald-100 border border-emerald-200 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-            ● Live
-          </span>
-        )}
-        {loadingChain && (
-          <span className="text-xs text-slate-400 animate-pulse">Loading chain…</span>
-        )}
-        {chainError && !loadingChain && !hasLiveData && (
-          <span className="rounded-full bg-red-100 border border-red-200 px-2 py-0.5 text-xs font-semibold text-red-600" title={chainError}>
-            ✕ {chainError.length > 60 ? chainError.slice(0, 60) + "…" : chainError}
-          </span>
-        )}
-        <span className="text-xs text-slate-400 flex-1">
-          {legType.endsWith("SHORT") ? "⚠ Negative qty for short" : ""}
-        </span>
-        {canRemove && (
-          <button onClick={onRemove}
-            className="rounded-lg border border-red-200 px-2.5 py-1 text-xs font-semibold text-red-500 hover:bg-red-50 transition-colors">
-            Remove
-          </button>
-        )}
-      </div>
-
-      <div className={compact ? "p-4 space-y-3" : "p-5 space-y-4"}>
-        {compact && (
-          <p className="text-[11px] text-slate-400">
-            Date, token, expiry, distances and futures price follow Leg 1.
-          </p>
-        )}
-        <div className="grid grid-cols-2 gap-3">
-          {show("entry_date") && <F label={syncLabel("entry_date", "Entry Date")}><input type="date" value={form.entry_date} onChange={(e) => set("entry_date", e.target.value)} className={`${inp} ${syncCls("entry_date")}`} /></F>}
-          {show("token") && <F label={syncLabel("token", "Token")}>
-            <TokenSelect
-              accountId={accountId}
-              value={form.token}
-              onChange={(v) => { set("token", v); }}
-            />
-          </F>}
-          {show("investment") && <F label="Investment"><input type="number" step="any" value={form.investment} onChange={(e) => set("investment", e.target.value)} className={inp} /></F>}
-
-          {/* Expiry — dropdown when live */}
-          {show("expiry") && <F label={syncLabel("expiry", hasLiveData ? "Expiry (live)" : "Expiry Date")}>
-            {hasLiveData ? (
-              <select
-                value={form.expiry}
-                onChange={e => {
-                  const next = e.target.value;
-                  // Rolling to another expiry keeps each leg's strike where the
-                  // new expiry lists it, so re-running a structure for a later
-                  // date needs only a new expiry and a refresh. A strike the new
-                  // expiry does not list is cleared, never left pointing at a
-                  // contract that does not exist.
-                  const validStrikes = liveExpiries.find(x => x.date === next)?.strikes || [];
-                  set("expiry", next, { validStrikes });
-                  if (!validStrikes.some(v => Number(v) === Number(form.options_strike))) set("options_strike", "");
-                }}
-                className={inp}
-              >
-                {/* A saved expiry that is no longer listed — usually one that has
-                    passed — is still shown as the selected value. Without it the
-                    browser displayed the first live expiry instead, so the card
-                    appeared to be on a date it was not. */}
-                {form.expiry && !liveExpiries.some(x => x.date === form.expiry) && (
-                  <option value={form.expiry}>
-                    {form.expiry} ({form.expiry < usMarketToday() ? "expired" : "not listed"})
-                  </option>
-                )}
-                {liveExpiries.map(e => (
-                  <option key={e.date} value={e.date}>{e.label} ({e.date})</option>
-                ))}
-              </select>
-            ) : (
-              <input type="date" value={form.expiry} onChange={(e) => set("expiry", e.target.value)} className={inp} />
-            )}
-          </F>}
-
-          {/* Strike — dropdown when live */}
-          <F label={hasLiveData ? "Strike (live)" : "Strike"}>
-            {hasLiveData && liveStrikes.length > 0 ? (
-              <select value={form.options_strike} onChange={e => { set("options_strike", e.target.value); }} className={inp}>
-                <option value="">— Select strike —</option>
-                {form.options_strike && !liveStrikes.some(v => String(v) === String(form.options_strike)) && (
-                  <option value={form.options_strike}>
-                    {form.options_strike}{liveStrikes.some(v => Number(v) === Number(form.options_strike)) ? "" : " (not listed)"}
-                  </option>
-                )}
-                {liveStrikes.map(s => (
-                  <option key={s} value={String(s)}>{Number(s).toLocaleString()}</option>
-                ))}
-              </select>
-            ) : (
-              <input type="text" placeholder='e.g. "70 CALL"' value={form.options_strike} onChange={(e) => set("options_strike", e.target.value)} className={inp} />
-            )}
-          </F>
-
-          <F label={syncLabel("opt_entry_qty", `Entry Qty${legType.endsWith("SHORT") ? " (negative)" : ""}`)}>
-            <input type="number" step="any" value={form.opt_entry_qty} onChange={(e) => set("opt_entry_qty", e.target.value)}
-              className={`${inp} ${
-                isOverridden("opt_entry_qty") ? "border-amber-300 bg-amber-50"
-                : legType.endsWith("SHORT") ? "border-orange-300 bg-orange-50" : ""
-              }`} />
-          </F>
-          <F label={tickerInfo ? "Entry Price (live)" : "Entry Price"}>
-            <input type="number" step="any" value={form.opt_entry_price} onChange={(e) => set("opt_entry_price", e.target.value)} className={inp} />
-          </F>
-          <F label="Exit Price"><input type="number" step="any" value={form.opt_exit_price} onChange={(e) => set("opt_exit_price", e.target.value)} className={inp} /></F>
-          {futuresHasBothTypes(form.token) && show("fut_instrument_type") && (
-            <F label="Futures Instrument">
-              <select
-                value={form.fut_instrument_type || "inverse"}
-                onChange={(e) => { set("fut_instrument_type", e.target.value); }}
-                className={inp}
-              >
-                <option value="inverse">Inverse — {(form.token || "BTC").toUpperCase()}-PERPETUAL</option>
-                <option value="linear">Linear/USDC — {(form.token || "BTC").toUpperCase()}_USDC-PERPETUAL</option>
-              </select>
-            </F>
-          )}
-          {show("fut_qty") && <F label="Fut Qty"><input type="number" step="any" value={form.fut_qty} onChange={(e) => set("fut_qty", e.target.value)} className={inp} /></F>}
-          {show("fut_entry_price") && <F label={syncLabel("fut_entry_price", hasLiveData && form.fut_entry_price ? "Fut Entry Price (live)" : "Fut Entry Price")}>
-            <input type="number" step="any" value={form.fut_entry_price} onChange={(e) => set("fut_entry_price", e.target.value)}
-              className={`${inp} ${syncCls("fut_entry_price")}`} />
-          </F>}
-          {show("fut_exit_price") && <F label="Fut Exit Price"><input type="number" step="any" value={form.fut_exit_price} onChange={(e) => set("fut_exit_price", e.target.value)} className={inp} /></F>}
-          <F label={tickerInfo ? "IV (%) (live)" : "IV (%) for BS"}>
-            <input type="number" step="0.5" min="1" max="500" placeholder="e.g. 30" value={form.iv} onChange={(e) => set("iv", e.target.value)} className={`${inp} border-indigo-200 bg-indigo-50`} />
-          </F>
-          {[["upside_distance", "Upside Distance"], ["down_distance", "Down Distance"]].filter(([key]) => show(key)).map(([key, title]) => (
-            <F key={key} label={syncLabel(key, title)}>
-              <input type="number" step="any" value={form[key]} onChange={(e) => set(key, e.target.value)} className={`${inp} ${syncCls(key)}`} />
-            </F>
-          ))}
-          {show("basket_distance") && <F label="Basket Distance"><input type="number" step="any" value={form.basket_distance} onChange={(e) => set("basket_distance", e.target.value)} className={inp} /></F>}
-          {show("basket_loss") && <F label="Basket Loss"><input type="number" step="any" value={form.basket_loss} onChange={(e) => set("basket_loss", e.target.value)} className={inp} /></F>}
-          {show("fut_pnl") && <F label="Futures PnL"><input type="number" step="any" value={form.fut_pnl} onChange={(e) => set("fut_pnl", e.target.value)} className={inp} /></F>}
-          {show("opt_pnl") && <F label="Options PnL"><input type="number" step="any" value={form.opt_pnl} onChange={(e) => set("opt_pnl", e.target.value)} className={inp} /></F>}
-          {show("net_booked_pnl") && <F label="Net Booked PnL (auto)">
-            <input type="number" step="any" value={form.net_booked_pnl} readOnly disabled
-              className={`${inp} bg-slate-50 text-slate-500 cursor-not-allowed`}
-              title="Auto-calculated: Futures PnL + Options PnL" />
-          </F>}
-          {show("status") && <F label={syncLabel("status", "Status")}>
-            <select value={form.status} onChange={(e) => set("status", e.target.value)} className={`${inp} ${syncCls("status")}`}>
-              <option value="open">Open</option>
-              <option value="closed">Closed</option>
-            </select>
-          </F>}
-          {show("end_date") && <F label={syncLabel("end_date", "End Date")}><input type="date" value={form.end_date} onChange={(e) => set("end_date", e.target.value)} className={`${inp} ${syncCls("end_date")}`} /></F>}
-        </div>
-
-        {/* Refresh live price button + ticker info */}
-        {hasLiveData && form.options_strike && form.expiry && (
-          <div className="flex items-center gap-3 flex-wrap">
-            <button
-              type="button"
-              onClick={refreshTicker}
-              disabled={fetchingTicker}
-              className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50 transition-colors"
-            >
-              {fetchingTicker ? "⏳" : "↺"} Refresh live price / IV
-            </button>
-            {tickerInfo && (
-              <span className="text-xs text-slate-400">
-                {tickerInfo.instrument} · mid&nbsp;
-                <span className="font-semibold text-emerald-600">${Number(tickerInfo.mid_price_usd ?? tickerInfo.mark_price_usd).toFixed(4)}</span>
-                &nbsp;· bid&nbsp;${Number(tickerInfo.best_bid_usd).toFixed(4)}
-                &nbsp;· ask&nbsp;${Number(tickerInfo.best_ask_usd).toFixed(4)}
-                &nbsp;· IV&nbsp;
-                <span className="font-semibold text-slate-600">{tickerInfo.mark_iv != null ? `${Number(tickerInfo.mark_iv).toFixed(1)}%` : "—"}</span>
-                &nbsp;· index&nbsp;${Number(tickerInfo.underlying_price).toFixed(2)}
-              </span>
-            )}
-            {tickerError && !fetchingTicker && (
-              <span className="text-xs font-medium text-amber-700">{tickerError}</span>
-            )}
-            {futInfo?.feed === "delayed_sip" && !fetchingTicker && (
-              <span className="text-xs text-slate-400">
-                underlying from the delayed feed
-                {futInfo.delayed != null ? `, ${futInfo.delayed} min behind` : ""}
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* One-line result for a compact card. The full per-leg breakdown is in
-            the Side-by-Side table below; "Show details" opens this leg's own
-            calculation and Black-Scholes figures, which appear nowhere else. */}
-        {compact && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-xs">
-            <span className="text-slate-400">Breakeven <span className="font-semibold text-slate-700">{(() => {
-              const K = strikeNumber(form.options_strike);
-              const ep = parseFloat(form.opt_entry_price) || 0;
-              if (!(K > 0)) return "—";
-              return (legType.startsWith("CALL") ? K + ep : K - ep).toLocaleString(undefined, { maximumFractionDigits: 2 });
-            })()}</span></span>
-            <span className="text-slate-400">Theta/day <span className={`font-semibold ${Number(derived.per_day_theta_gain_loss) >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmt(derived.per_day_theta_gain_loss)}</span></span>
-            <span className="text-slate-400">Up <span className={`font-semibold ${Number(derived.upside_opt_pnl) >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmt(derived.upside_opt_pnl)}</span></span>
-            <span className="text-slate-400">Down <span className={`font-semibold ${Number(derived.down_opt_pnl) >= 0 ? "text-emerald-600" : "text-red-600"}`}>{fmt(derived.down_opt_pnl)}</span></span>
-            <button type="button" onClick={() => setShowDetails((v) => !v)}
-              className="ml-auto text-[11px] font-semibold text-blue-600 hover:text-blue-800">
-              {showDetails ? "Hide details" : "Show details"}
-            </button>
-          </div>
-        )}
-
-        {/* Leg 1's calculation panel sits behind a toggle too. Open, it runs to
-            some thirty rows — most of them zeros until the card is filled in —
-            and pushed the rest of the page a full screen down. Compact cards
-            already open theirs from the one-line result above. */}
-        {!compact && (
-          <button
-            type="button"
-            onClick={() => setShowDetails((v) => !v)}
-            aria-expanded={showDetails}
-            className="flex w-full items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-4 py-2.5 text-left hover:bg-slate-100 transition-colors"
-          >
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Auto-Calculated &amp; BS Option PnL
-            </span>
-            <svg
-              className={`h-4 w-4 text-slate-400 transition-transform ${showDetails ? "rotate-180" : ""}`}
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-            >
-              <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-        )}
-
-        {/* Live calc strip */}
-        {showDetails && (
-        <div className="rounded-lg bg-slate-50 border border-slate-100 p-4 space-y-1">
-          {/* On Leg 1 the toggle above already names the panel. */}
-          {compact && <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Auto-Calculated</p>}
-          <CalcRow label="Days to Expiry"    value={fmt(derived.days_to_expiry, "n")} />
-          <CalcRow label="Total Theta"       value={fmt(derived.total_theta_gain_loss)} signed />
-          <CalcRow label="Per Day Theta"     value={fmt(derived.per_day_theta_gain_loss)} signed />
-          <CalcRow label="Total Baskets"     value={fmt(derived.total_baskets, "n")} />
-          <CalcRow label="Total MM Loss"     value={fmt(derived.total_mm_loss)} neg />
-          <div className="my-2 border-t border-slate-200" />
-          <CalcRow label="Upper Limit"       value={fmt(derived.upper_limit, "n")} />
-          <CalcRow label="Lower Limit"       value={fmt(derived.lower_limit, "n")} />
-          <div className="my-2 border-t border-slate-200" />
-          <CalcRow label="Opt PnL (Upside)"  value={fmt(derived.upside_opt_pnl)} signed />
-          <CalcRow label="Fut PnL (Upside)"  value={fmt(derived.upside_fut_pnl)} signed />
-          <div className="my-2 border-t border-slate-200" />
-          <CalcRow label="Opt PnL (Down)"    value={fmt(derived.down_opt_pnl)} signed />
-          <CalcRow label="Fut PnL (Down)"    value={fmt(derived.downside_fut_pnl)} signed />
-          <div className="my-2 border-t border-slate-200" />
-          <CalcRow label="APY"               value={derived.apy != null ? `${Number(derived.apy).toFixed(2)}%` : "—"} signed big />
-          <BsStrip form={form} legType={legType} derived={derived} />
-        </div>
-        )}
-      </div>
-    </div>
-  );
-});
 
 /* ── Sub-components ──────────────────────────────────── */
 
-function F({ label, children }) {
-  return (
-    <div>
-      <label className="mb-1 block text-xs font-medium text-slate-500">{label}</label>
-      {children}
-    </div>
-  );
-}
 
-function CalcRow({ label, value, signed, neg, big }) {
-  const raw   = parseFloat(String(value ?? "").replace(/[^0-9.-]/g, ""));
-  const isNum = !isNaN(raw);
-  const color = neg ? "text-red-600"
-    : signed && isNum && raw < 0  ? "text-red-600"
-    : signed && isNum && raw >= 0 ? "text-emerald-600"
-    : "text-slate-700";
-  return (
-    <div className={`flex items-center justify-between ${big ? "py-1" : ""}`}>
-      <span className={big ? "text-sm font-bold text-slate-700" : "text-xs text-slate-400"}>{label}</span>
-      <span className={`${big ? "text-base font-extrabold" : "text-xs font-semibold"} ${color}`}>{value ?? "—"}</span>
-    </div>
-  );
-}
 
 // `sub` is a working line under the figure; `live` adds the ticking dot.
 // Everything in the strategy header goes through here rather than carrying its
@@ -2986,65 +2410,6 @@ function PlusIcon() {
 
 /* ── BS Strip (per-leg Black-Scholes PNL preview) ───── */
 
-function BsStrip({ form, legType, derived }) {
-  const K_bs      = strikeNumber(form.options_strike);
-  const ep_bs     = parseFloat(form.opt_entry_price) || 0;
-  const qty_bs    = parseFloat(form.opt_entry_qty)   || 0;
-  const S_bs      = parseFloat(form.fut_entry_price) || K_bs || 0;
-  const sigma_bs  = Math.max(0.01, (parseFloat(form.iv) || 30) / 100);
-  const optType_bs = (form.option_type || (legType.startsWith("CALL") ? "CALL" : "PUT")).toUpperCase();
-  const today_d   = new Date(); today_d.setHours(0, 0, 0, 0);
-  const expiry_d  = form.expiry ? (() => { const d = new Date(form.expiry); d.setHours(0,0,0,0); return d; })() : null;
-  const dte_bs    = expiry_d ? Math.max(0, Math.round((expiry_d - today_d) / 86400000)) : 0;
-  const T_bs      = dte_bs / 365;
-  const S_up_bs   = S_bs + (parseFloat(form.upside_distance) || 0);
-  const S_dn_bs   = S_bs - (parseFloat(form.down_distance)   || 0);
-  const hasBS     = K_bs > 0 && qty_bs !== 0;
-
-  const bsUp        = hasBS ? expiryPnl(S_up_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
-  const bsDn        = hasBS ? expiryPnl(S_dn_bs, K_bs, optType_bs, ep_bs, qty_bs) : null;
-  const bsUpToday   = hasBS && S_up_bs > 0
-    ? (T_bs > 0 ? currentPnl(S_up_bs, K_bs, T_bs, RISK_FREE, sigma_bs, optType_bs, ep_bs, qty_bs)
-                : expiryPnl(S_up_bs, K_bs, optType_bs, ep_bs, qty_bs)) : null;
-  const bsDnToday   = hasBS && S_dn_bs > 0
-    ? (T_bs > 0 ? currentPnl(S_dn_bs, K_bs, T_bs, RISK_FREE, sigma_bs, optType_bs, ep_bs, qty_bs)
-                : expiryPnl(S_dn_bs, K_bs, optType_bs, ep_bs, qty_bs)) : null;
-  const bsToday     = hasBS && S_bs > 0
-    ? (T_bs > 0 ? currentPnl(S_bs, K_bs, T_bs, RISK_FREE, sigma_bs, optType_bs, ep_bs, qty_bs)
-                : expiryPnl(S_bs, K_bs, optType_bs, ep_bs, qty_bs)) : null;
-  const bsBE = K_bs > 0 ? (optType_bs === "CALL" ? K_bs + ep_bs : K_bs - ep_bs) : null;
-
-  const futUp = Number(derived?.upside_fut_pnl)   || 0;
-  const futDn = Number(derived?.downside_fut_pnl) || 0;
-  const mm    = Number(derived?.total_mm_loss)    || 0;
-  const netUpToday  = bsUpToday != null ? bsUpToday + futUp + mm : null;
-  const netDnToday  = bsDnToday != null ? bsDnToday + futDn + mm : null;
-  const netUpExpiry = bsUp      != null ? bsUp      + futUp + mm : null;
-  const netDnExpiry = bsDn      != null ? bsDn      + futDn + mm : null;
-
-  return (
-    <>
-      <div className="my-2 border-t border-indigo-200" />
-      <p className="text-xs font-semibold uppercase tracking-wide text-indigo-400 mb-1">
-        📊 BS Option PNL (IV {form.iv || 30}%, {dte_bs}d)
-      </p>
-      <CalcRow label="Upside Opt (Today BS)"     value={fmt(bsUpToday)}   signed />
-      <CalcRow label="Downside Opt (Today BS)"   value={fmt(bsDnToday)}   signed />
-      <CalcRow label="Upside Opt (Expiry)"       value={fmt(bsUp)}        signed />
-      <CalcRow label="Downside Opt (Expiry)"     value={fmt(bsDn)}        signed />
-      <CalcRow label="Fut PnL (Upside)"          value={fmt(futUp)}       signed />
-      <CalcRow label="Fut PnL (Downside)"        value={fmt(futDn)}       signed />
-      <CalcRow label="Total MM Loss"             value={fmt(mm)}          neg />
-      <CalcRow label="Net BS Upside (Today)"     value={fmt(netUpToday)}  signed big />
-      <CalcRow label="Net BS Downside (Today)"   value={fmt(netDnToday)}  signed big />
-      <CalcRow label="Est Net Upside (Expiry)"   value={fmt(netUpExpiry)} signed big />
-      <CalcRow label="Est Net Downside (Expiry)" value={fmt(netDnExpiry)} signed big />
-      <CalcRow label="At Current Price (Today BS)" value={fmt(bsToday)}   signed big />
-      <CalcRow label="Breakeven"
-        value={bsBE != null ? bsBE.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"} />
-    </>
-  );
-}
 
 /* ── Formatters ──────────────────────────────────────── */
 

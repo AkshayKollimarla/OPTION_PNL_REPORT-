@@ -24,7 +24,7 @@ const Box = ({ wide, ...props }) => (
     {...props}
     type="number"
     step="any"
-    className={`${wide ? "w-24" : "w-20"} rounded border border-slate-200 bg-white px-1.5 py-1 text-right text-xs tabular-nums text-slate-700 focus:border-blue-400 focus:outline-none`}
+    className={`${wide ? "w-24" : "w-20"} rounded border border-slate-200 bg-white px-1.5 py-1 text-right text-[13px] tabular-nums text-slate-700 focus:border-blue-400 focus:outline-none`}
   />
 );
 
@@ -41,12 +41,12 @@ export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemov
 
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-100 bg-slate-50">
-      <table className="w-full min-w-[820px] border-collapse text-xs">
+      <table className="w-full min-w-[860px] border-collapse text-[13px]">
         <thead>
           <tr className="border-b border-slate-200">
             {COLUMNS.map((h, i) => (
               <th key={h || `blank${i}`}
-                className="px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                className="px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-600">
                 {h}
               </th>
             ))}
@@ -59,14 +59,14 @@ export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemov
                 <Box value={l.strike ?? ""} placeholder="—"
                   onChange={(e) => onChange?.(l.key, "strike", e.target.value)} />
               </td>
-              <td className="px-2 py-1.5 text-slate-500">{l.optType === "CALL" ? "Call" : "Put"}</td>
-              <td className="px-2 py-1.5 whitespace-nowrap text-slate-500">{l.expiry || "—"}</td>
+              <td className="px-2 py-1.5 font-medium text-slate-600">{l.optType === "CALL" ? "Call" : "Put"}</td>
+              <td className="px-2 py-1.5 whitespace-nowrap text-slate-600">{l.expiry || "—"}</td>
               <td className="px-2 py-1.5">
                 {/* One control, two states. A long and a short are the same leg
                     sized the other way, so this flips the sign of the quantity
                     rather than being a field of its own. */}
                 <button type="button" onClick={() => onSide?.(l.key, l.side === "LONG" ? "SHORT" : "LONG")}
-                  className={`rounded px-2 py-0.5 text-[11px] font-bold transition-colors ${
+                  className={`rounded px-2.5 py-1 text-xs font-bold transition-colors ${
                     l.side === "LONG"
                       ? "bg-blue-100 text-blue-700 hover:bg-blue-200"
                       : "bg-red-100 text-red-700 hover:bg-red-200"}`}>
@@ -87,7 +87,7 @@ export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemov
               </td>
               {/* Live off the chain, not typed: it is the volatility of the
                   contract on the line, and it moves with the market. */}
-              <td className="px-2 py-1.5 text-right tabular-nums text-slate-500">
+              <td className="px-2 py-1.5 text-right tabular-nums text-slate-600">
                 {l.iv == null ? "—" : `${(l.iv * 100).toFixed(1)}%`}
               </td>
               <td className="px-2 py-1.5">
