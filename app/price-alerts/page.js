@@ -287,6 +287,15 @@ export default function PriceAlertsPage() {
                         ) : (
                           <span className="text-xs text-slate-400">{row.account || "no account"} · {row.legs} legs</span>
                         )}
+                        {/* Listed is not armed. A strategy appears here as
+                            soon as it is open, but nothing is sent for it
+                            until someone ticks Alerts on and saves -- and an
+                            unticked box on its own does not explain that. */}
+                        {row.kind !== "manual" && row.configured === false && (
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                            not set up
+                          </span>
+                        )}
                       </div>
                       <p className="mt-1 text-[11px] text-slate-400">
                         {row.kind === "manual"
@@ -396,6 +405,9 @@ export default function PriceAlertsPage() {
                         />
                         Alerts on
                       </label>
+                      {row.kind !== "manual" && row.configured === false && (
+                        <span className="text-[11px] text-slate-500">tick and save to start watching</span>
+                      )}
                       {/* A button, not a link: it destroys something, and it
                           sits beside Save where a bare word reads as a label. */}
                       <button
