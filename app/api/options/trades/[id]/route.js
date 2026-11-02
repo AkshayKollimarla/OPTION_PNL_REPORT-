@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import pool from "../../../../../lib/options-db";
 import { computeDerived, DERIVED_FIELDS } from "../../../../../lib/options-calculations";
+import { armStrategyAlert } from "../../../../../lib/price-alert-store";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +56,16 @@ export async function PUT(request, { params }) {
     const vals = [...updateable.map((c) => sanitize(final[c])), id];
 
     await pool.query(`UPDATE options_trades SET ${sets} WHERE id = ?`, vals);
+
+    // Saving a structure asks to be told when it reaches its limits, so the
+    // alert is armed here rather than needing a second trip to the Price
+    // Alerts page. Failing to arm must not fail the save: the strategy is
+    // already written, and an alert that did not arm is a smaller problem
+    // than a save reporting an error it did not have.
+    const alertKey = final.group_id ? `g:${final.group_id}` : `s:${id}`;
+    try { await armStrategyAlert(alertKey); }
+    catch (e) { console.warn(`[price-alerts] could not arm ${alertKey}: ${e.message}`); }
+
     return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
