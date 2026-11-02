@@ -46,6 +46,8 @@ export default function MonthlyPnlPage() {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
   const [account, setAccount] = useState("all");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
 
   useEffect(() => {
     fetch("/api/monthly-pnl", { cache: "no-store" })
@@ -74,18 +76,36 @@ export default function MonthlyPnlPage() {
   // as the total for all of them.
   const { months, undated, grand } = useMemo(() => {
     const all = rows || [];
-    const picked = account === "all" ? all
+    const byAccount = account === "all" ? all
       : account === NO_ACCOUNT ? all.filter((r) => !r.account)
       : all.filter((r) => r.account === account);
+    // Both ends are inclusive, and compared as YYYY-MM-DD strings: the dates
+    // sort that way already, so there is no Date to build and no timezone to
+    // shift the boundary by a day.
+    //
+    // A structure with no end date cannot be shown to fall inside a range, so
+    // a range excludes it rather than keeping it on the grounds that nothing
+    // ruled it out. The page says so where they are listed.
+    const picked = (!from && !to) ? byAccount : byAccount.filter((r) => {
+      const d = String(r.ended || "");
+      if (!d) return false;
+      return (!from || d >= from) && (!to || d <= to);
+    });
     return buildMonths(picked);
-  }, [rows, account]);
+  }, [rows, account, from, to]);
+
+  const ranged = Boolean(from || to);
 
   const data = rows ? { months, undated, grand } : null;
 
   const csvFor = (m) => {
     const rows = [...m.lines.map((l) => ({ ...l, month: m.label })),
       { month: m.label, coin: "TOTAL", day: "", ...m.totals }];
-    downloadCsv(`trade-log-${m.key}${account === "all" ? "" : "-" + accountLabel(account).toLowerCase().replace(/[^a-z0-9]+/g, "-")}.csv`,
+    const slug = [
+      account === "all" ? null : accountLabel(account).toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+      ranged ? `${from || "start"}_${to || "end"}` : null,
+    ].filter(Boolean).join("-");
+    downloadCsv(`trade-log-${m.key}${slug ? "-" + slug : ""}.csv`,
       toCsv(rows, [{ key: "month", label: "Month" }, ...COLUMNS]));
   };
 
@@ -99,7 +119,24 @@ export default function MonthlyPnlPage() {
             typed twice — a strategy appears the moment it is marked closed with its figures.
           </p>
         </div>
-        <div className="flex items-end gap-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-semibold text-slate-600">Closed from</span>
+            <input type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)}
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] text-slate-700" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-semibold text-slate-600">to</span>
+            <input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)}
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] text-slate-700" />
+          </label>
+          {(ranged || account !== "all") && (
+            <button type="button"
+              onClick={() => { setFrom(""); setTo(""); setAccount("all"); }}
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+              Clear filters
+            </button>
+          )}
           {(accounts.named.length + (accounts.none ? 1 : 0)) > 1 && (
             <label className="block">
               <span className="mb-1 block text-[11px] font-semibold text-slate-600">Account</span>
@@ -133,9 +170,10 @@ export default function MonthlyPnlPage() {
 
       {data && !months.length && (
         <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
-          {account === "all"
+          {!ranged && account === "all"
             ? "Nothing closed yet. Set a strategy’s status to Closed in the simulator and it will appear here."
-            : `Nothing closed under ${accountLabel(account)}.`}
+            : `Nothing closed${account === "all" ? "" : ` under ${accountLabel(account)}`}${
+                ranged ? ` between ${from || "the start"} and ${to || "today"}` : ""}.`}
         </div>
       )}
 
@@ -209,7 +247,7 @@ export default function MonthlyPnlPage() {
             <h2 className="text-sm font-bold text-amber-800">Closed with no end date</h2>
             <p className="text-[11px] text-amber-700">
               These are closed but carry no end date, so there is no month to file them under. Set an end
-              date on each and it will drop into place.
+              date on each and it will drop into place.{ranged && " A date range leaves them out, since there is no date to place them inside it."}
             </p>
           </div>
           <ul className="divide-y divide-amber-200">
