@@ -311,6 +311,9 @@ function SimulatorInner() {
   const [comboAutoCloseAfterEntry, setComboAutoCloseAfterEntry] = useState(false);
   const comboAcTimerRef = useRef(null);
 
+  // True once the closing figures have been edited here, which is the only
+  // thing that may rewrite the booked total.
+  const pnlTouchedRef = useRef(false);
   const [refreshingAll, setRefreshingAll] = useState(false);
 
   /**
@@ -803,12 +806,54 @@ function SimulatorInner() {
     };
   }), [legs, liveMids, quoteOf]);
 
+  // The two closing figures, which are the only inputs that may move the
+  // booked total.
+  const closingPnl = (key) => ({
+    value: legs[masterLegIdx]?.form[key] ?? "",
+    onChange: (e) => { pnlTouchedRef.current = true; setLegField(masterLegIdx, key, e.target.value); },
+  });
+
   // Fields that belong to the structure rather than to a leg. They are
   // written to the first card, which every other leg follows.
   const shared = (key) => ({
     value: legs[masterLegIdx]?.form[key] ?? "",
     onChange: (e) => setLegField(masterLegIdx, key, e.target.value),
   });
+
+  /**
+   * Booked PnL is the two halves added, never a third figure to type.
+   *
+   * The leg cards used to compute it and show it read-only; deleting them took
+   * the effect with them and left the box editable and empty, so a closed
+   * structure booked nothing unless someone filled it in -- and the monthly
+   * log, which reports what was booked, showed zero for it.
+   *
+   * Market-making PL is deliberately not part of this. It is the grid bot's
+   * own contribution, reported on the bot side, and adding it here counted it
+   * twice in every combined figure.
+   */
+  useEffect(() => {
+    // Only ever in response to someone typing in those two boxes. Loading a
+    // strategy also changes them -- from blank to whatever was saved -- and
+    // recomputing then would rewrite the book rather than report it. Eighteen
+    // closed structures carry a booked figure with both halves never filled
+    // in (HOOD-8THJULY books 714 against no recorded halves); opening one of
+    // those would have zeroed it.
+    if (!pnlTouchedRef.current) return;
+    const form = legs[masterLegIdx]?.form;
+    if (!form) return;
+    if (form.fut_pnl === "" && form.opt_pnl === "") {
+      if (form.net_booked_pnl !== "") setLegField(masterLegIdx, "net_booked_pnl", "");
+      return;
+    }
+    // To the cent: 1519.4 + -1110 is 409.40000000000003 in binary, and that
+    // is what would be written to the book.
+    const computed = Math.round((n(form.fut_pnl) + n(form.opt_pnl)) * 100) / 100;
+    if (String(computed) !== String(form.net_booked_pnl)) {
+      setLegField(masterLegIdx, "net_booked_pnl", String(computed));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [legs[masterLegIdx]?.form.fut_pnl, legs[masterLegIdx]?.form.opt_pnl, masterLegIdx]);
 
   /**
    * Closing a structure is what gives it an end date, so changing the status
@@ -2095,9 +2140,15 @@ function SimulatorInner() {
                 </select>
               </Field>
               <Field label="End Date"><input type="date" {...shared("end_date")} className={barInput} /></Field>
-              <Field label="Options PnL"><input type="number" step="any" {...shared("opt_pnl")} className={barInput} /></Field>
-              <Field label="Futures PnL"><input type="number" step="any" {...shared("fut_pnl")} className={barInput} /></Field>
-              <Field label="Booked PnL"><input type="number" step="any" {...shared("net_booked_pnl")} className={barInput} /></Field>
+              <Field label="Options PnL"><input type="number" step="any" {...closingPnl("opt_pnl")} className={barInput} /></Field>
+              <Field label="Futures PnL"><input type="number" step="any" {...closingPnl("fut_pnl")} className={barInput} /></Field>
+              {/* Read-only on purpose: it is the sum of the two beside it, so
+                  a typed value could only ever disagree with them. */}
+              <Field label="Booked PnL (auto)">
+                <input type="number" step="any" readOnly disabled
+                  value={legs[masterLegIdx]?.form.net_booked_pnl ?? ""}
+                  className={`${barInput} cursor-not-allowed bg-slate-100 font-semibold`} />
+              </Field>
             </div>
           </div>
         </div>
