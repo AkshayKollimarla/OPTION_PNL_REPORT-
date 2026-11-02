@@ -23,6 +23,7 @@ const optionsNav = [
   { href: "/options/analysis",   label: "Strategy Analysis",   icon: ChartIcon      },
   { href: "/options/summary",    label: "Options Summary",     icon: ChartIcon      },
   { href: "/price-alerts",       label: "Price Alerts",        icon: BellIcon       },
+  { href: "/monthly-pnl",        label: "Monthly PnL",         icon: ReportIcon     },
   { href: "/accounts",           label: "Accounts",            icon: AccountsIcon   },
 ];
 
