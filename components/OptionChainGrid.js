@@ -41,7 +41,7 @@ function PriceCell({ side, optType, strike, expiry, pickedOf, onPick }) {
         title={`${kind === "BID" ? "Sell" : "Buy"} ${optType.toLowerCase()} ${strike} at the ${kind.toLowerCase()}`}
         disabled={value === null || value === undefined}
         onClick={() => onPick({ optType, side: dir, strike, expiry, price: value, iv: s.iv })}
-        className={`${PRICE_W} rounded px-1.5 py-0.5 text-center text-[13px] font-semibold tabular-nums transition-colors disabled:cursor-default disabled:text-slate-300 disabled:hover:bg-transparent ${tone}`}
+        className={`${PRICE_W} rounded px-1.5 py-0.5 text-center text-[13px] font-semibold tabular-nums transition-colors disabled:cursor-default disabled:text-slate-400 disabled:hover:bg-transparent ${tone}`}
       >
         {fmtPx(value)}
       </button>
@@ -215,9 +215,9 @@ export default function OptionChainGrid({
           {WINDOWS.map((w) => <option key={w.n} value={w.n}>{w.label}</option>)}
         </select>
 
-        {loading && <span className="text-[11px] text-slate-400 animate-pulse">Loading chain…</span>}
+        {loading && <span className="text-[11px] text-slate-500 animate-pulse">Loading chain…</span>}
         {!loading && data && (
-          <span className="flex items-center gap-1.5 text-[11px] text-slate-400">
+          <span className="flex items-center gap-1.5 text-[11px] text-slate-500">
             <span className="relative flex h-2 w-2">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
@@ -248,7 +248,7 @@ export default function OptionChainGrid({
       )}
 
       {!canLoad ? (
-        <div className="px-4 py-6 text-center text-xs text-slate-400">
+        <div className="px-4 py-6 text-center text-xs text-slate-500">
           Pick an account, a coin and an expiry to load the chain.
         </div>
       ) : (
@@ -271,7 +271,7 @@ export default function OptionChainGrid({
                 <td colSpan={cols} className="px-2 py-1">
                   <button type="button" onClick={() => setOpen((o) => !o)}
                     className="flex items-center gap-2 text-[11px] font-bold text-slate-600">
-                    <span className="text-slate-400">{open ? "▾" : "▸"}</span>
+                    <span className="text-slate-600">{open ? "▾" : "▸"}</span>
                     {data?.expiry
                       ? new Date(`${data.expiry}T00:00:00Z`).toLocaleDateString(undefined, { month: "long", day: "numeric", timeZone: "UTC" })
                       : expiry}
@@ -304,7 +304,7 @@ export default function OptionChainGrid({
               )}
 
               {open && !rows.length && !loading && (
-                <tr><td colSpan={cols} className="px-3 py-4 text-center text-xs text-slate-400">
+                <tr><td colSpan={cols} className="px-3 py-4 text-center text-xs text-slate-500">
                   No strikes listed for this expiry.
                 </td></tr>
               )}

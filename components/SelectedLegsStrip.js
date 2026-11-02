@@ -98,12 +98,12 @@ export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemov
                   onChange={(e) => onChange?.(l.key, "mm", e.target.value)} />
               </td>
               <td className={`px-2 py-1.5 text-right font-semibold tabular-nums ${
-                l.pnl == null ? "text-slate-400" : l.pnl < 0 ? "text-red-600" : "text-emerald-600"}`}>
+                l.pnl == null ? "text-slate-500" : l.pnl < 0 ? "text-red-600" : "text-emerald-600"}`}>
                 {fmtMoney(l.pnl)}
               </td>
               <td className="px-2 py-1.5 text-right">
                 <button type="button" title="Remove this leg" onClick={() => onRemove?.(l.key)}
-                  className="rounded px-1.5 py-0.5 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500">
+                  className="rounded px-1.5 py-0.5 text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600">
                   ✕
                 </button>
               </td>
