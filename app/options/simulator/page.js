@@ -13,11 +13,11 @@ import SelectedLegsStrip from "../../../components/SelectedLegsStrip";
 
 const RISK_FREE = 0.05;
 
-const barInput = "w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none";
+const barInput = "w-full rounded border border-slate-200 bg-white px-2 py-1.5 text-[13px] text-slate-700 focus:border-blue-400 focus:outline-none";
 
 const Field = ({ label, children }) => (
   <label className="block">
-    <span className="mb-0.5 block text-[10px] font-medium text-slate-400">{label}</span>
+    <span className="mb-1 block text-[11px] font-semibold text-slate-600">{label}</span>
     {children}
   </label>
 );
@@ -2033,6 +2033,7 @@ function SimulatorInner() {
           />
           <SelectedLegsStrip
             legs={stripLegs}
+            onAdd={addLeg}
             onChange={stripChange}
             onSide={(idx, side) => changeLegType(idx, `${(legs[idx]?.type || "CALL LONG").split(" ")[0]} ${side}`)}
             onRemove={(idx) => removeLeg(idx)}
@@ -2041,7 +2042,7 @@ function SimulatorInner() {
           {/* What belongs to the structure rather than to any one leg. One row
               of six, instead of the same six repeated on four cards. */}
           <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Structure</p>
+            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-700">Structure</p>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
               <Field label="Entry Date"><input type="date" {...shared("entry_date")} className={barInput} /></Field>
               <Field label="Investment"><input type="number" step="any" {...shared("investment")} className={barInput} /></Field>
@@ -2056,7 +2057,7 @@ function SimulatorInner() {
               rather than what it was projected to make, so they are entered
               rather than derived. */}
           <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">On close</p>
+            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-700">On close</p>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
               <Field label="Status">
                 <select {...shared("status")} className={barInput}>

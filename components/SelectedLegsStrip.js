@@ -30,11 +30,14 @@ const Box = ({ wide, ...props }) => (
 
 const COLUMNS = ["Strike", "Type", "Expiration", "S/L", "Size", "Price", "Exit", "IV", "MM Loss", "P&L", ""];
 
-export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemove }) {
+export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemove, onAdd }) {
   if (!legs.length) {
     return (
-      <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-xs text-slate-400">
-        Click a bid or an ask in the chain to add a leg. The bid sells, the ask buys.
+      <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center">
+        <p className="text-[13px] text-slate-500">
+          Click a bid or an ask in the chain to add a leg. The bid sells, the ask buys.
+        </p>
+        {onAdd && <AddLegButton onAdd={onAdd} className="mt-3" />}
       </div>
     );
   }
@@ -108,6 +111,20 @@ export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemov
           ))}
         </tbody>
       </table>
+      {onAdd && (
+        <div className="border-t border-slate-100 px-2 py-2">
+          <AddLegButton onAdd={onAdd} />
+        </div>
+      )}
     </div>
+  );
+}
+
+function AddLegButton({ onAdd, className = "" }) {
+  return (
+    <button type="button" onClick={onAdd}
+      className={`inline-flex items-center gap-1.5 rounded-lg border border-dashed border-teal-300 bg-white px-3 py-1.5 text-xs font-semibold text-teal-700 transition-colors hover:border-teal-400 hover:bg-teal-50 ${className}`}>
+      <span className="text-sm leading-none">+</span> Add Leg
+    </button>
   );
 }
