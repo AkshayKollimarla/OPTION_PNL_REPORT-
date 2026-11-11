@@ -162,6 +162,18 @@ export default function ResultsPage() {
 
   const sameZone = fmt.localZone === "America/New_York";
 
+  // "2:00 PM ET · 00:30 GMT+5:30, 19 Nov" -- the same moment, written in
+  // both clocks, with the local DATE spelled out because it is often not the
+  // same day.
+  const localLine = (at) => {
+    if (!at) return "";
+    const d = new Date(at);
+    const et = `${fmt.et.format(d)} ET`;
+    if (sameZone) return et;
+    const day = d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    return `${et} · ${fmt.local.format(d)} ${fmt.zoneName}, ${day}`;
+  };
+
   const earnings = useMemo(() => {
     const rows = data?.earnings?.rows || [];
     const needle = q.trim().toUpperCase();
@@ -211,7 +223,10 @@ export default function ResultsPage() {
   }, [eventsAhead, impacts, fedOnly]);
 
   const fomc = data?.fomc?.rows || [];
-  const nextFomc = fomc[0] || null;
+  // The card names the next RATE DECISION specifically, so it skips a minutes
+  // release that happens to fall sooner.
+  const nextFomc = fomc.find((e) => e.kind === "decision") || null;
+  const nextFomcAny = fomc[0] || null;
   const news = data?.news?.rows || [];
 
   const highAhead = eventsAhead.filter((e) => e.impact === "High").length;
@@ -314,9 +329,12 @@ export default function ResultsPage() {
                   <p className="text-lg font-bold text-slate-800">
                     {nextFomc.date} <span className="text-[13px] font-semibold text-slate-500">{untilLabel(nextFomc.date)}</span>
                   </p>
-                  <p className="text-[11px] text-slate-500">
-                    {nextFomc.projections ? "Projections and press conference" : "Statement only"}
-                  </p>
+                  <p className="text-[11px] text-slate-500">{localLine(nextFomc.at)}</p>
+                  {nextFomcAny && nextFomcAny.kind === "minutes" && (
+                    <p className="text-[11px] font-semibold text-indigo-600">
+                      Minutes first, {nextFomcAny.date} ({untilLabel(nextFomcAny.date)})
+                    </p>
+                  )}
                 </>
               ) : (
                 <p className="text-[13px] text-slate-500">{data.fomc?.error ? "Schedule unavailable" : "None scheduled"}</p>
@@ -593,7 +611,7 @@ export default function ResultsPage() {
               <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">FOMC meetings ahead</h2>
               <span className="flex items-center gap-2 text-[11px] text-slate-500">
                 <Stale on={data.fomc?.stale} at={data.fomc?.fetchedAt} />
-                From the Federal Reserve&rsquo;s published schedule
+                Decisions and minutes, from the Federal Reserve&rsquo;s own schedule
               </span>
             </div>
             {data.fomc?.error ? (
@@ -602,13 +620,30 @@ export default function ResultsPage() {
               <p className="px-4 py-8 text-center text-sm text-slate-500">No meetings published.</p>
             ) : (
               <ul className="divide-y divide-slate-100">
-                {fomc.slice(0, 8).map((m) => (
+                {fomc.slice(0, 10).map((m) => (
                   <li key={m.key} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 hover:bg-slate-50">
-                    <span className="w-28 shrink-0 tabular-nums text-[13px] font-bold text-slate-800">{m.date}</span>
+                    <span className="w-28 shrink-0 tabular-nums text-[13px] font-bold text-slate-800">
+                      {m.date}
+                      {/* Both the statement and the minutes go out at 2pm New
+                          York, which is the small hours of the NEXT day in
+                          India. A bare date here is what makes a calendar
+                          kept in another zone look like it disagrees. */}
+                      <span className="block text-[11px] font-normal text-slate-500">{localLine(m.at)}</span>
+                    </span>
                     <span className="w-20 shrink-0"><Impact value={m.impact} /></span>
                     <span className="flex-1 text-[13px] text-slate-700">
                       {m.title}
-                      <span className="ml-2 text-[11px] text-slate-500">meets {m.starts} &ndash; {m.date}</span>
+                      {m.kind === "minutes" && (
+                        <span className="ml-2 rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold uppercase text-indigo-700">
+                          minutes
+                        </span>
+                      )}
+                      {!m.confirmed && (
+                        <span className="ml-2 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amber-800">
+                          expected
+                        </span>
+                      )}
+                      <span className="ml-2 text-[11px] text-slate-500">{m.detail}</span>
                     </span>
                     <span className="text-[11px] font-semibold text-slate-500">{untilLabel(m.date)}</span>
                   </li>
