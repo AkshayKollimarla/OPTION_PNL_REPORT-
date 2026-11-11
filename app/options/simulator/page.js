@@ -10,6 +10,7 @@ import { spreadPrices, livePnl, futuresPnl } from "../../../lib/spread-price";
 import { legKey } from "../../../lib/leg-key";
 import OptionChainGrid from "../../../components/OptionChainGrid";
 import SelectedLegsStrip from "../../../components/SelectedLegsStrip";
+import { contractSize, toLots, toQuantity, US_EQUITY_CONTRACT } from "../../../lib/contract-size";
 
 const RISK_FREE = 0.05;
 
@@ -690,6 +691,28 @@ function SimulatorInner() {
     return (optType === "CALL" ? row?.call : row?.put) || null;
   }, [chainQuotes]);
 
+  // What one unit in the Size box is worth. A US equity option contract is 100
+  // shares, so 1 means one contract and 2 means two. A Deribit leg is sized in
+  // the coin itself and stays 1 for 1 -- multiplying that by a hundred would
+  // record a position a hundred times the real one.
+  //
+  // Two sources, in that order. The chain payload's venue is decided on the
+  // server from the actual credential, so it is the one to trust when it is
+  // there; the account's own key id is the fallback, which is what edit mode
+  // has before a chain has loaded for the structure's expiry. Either way it is
+  // the credential that decides, never the exchange column -- that is a
+  // reporting label, and the US equity account is deliberately labelled
+  // "hyperliquid" so its strategies group with the bot entries they hedge.
+  //
+  // Falling back to 1 is the safe way round: a number is taken at face value
+  // rather than silently multiplied by a hundred. The strip says which it is,
+  // so an unmultiplied size is visible rather than quietly wrong.
+  const lotSize = useMemo(() => {
+    if (chainQuotes?.venue === "alpaca") return US_EQUITY_CONTRACT;
+    if (chainQuotes?.venue === "deribit") return 1;
+    return contractSize(accounts.find((a) => String(a.id) === String(selectedAcct)));
+  }, [chainQuotes?.venue, accounts, selectedAcct]);
+
   chainTokenRef.current = chainToken;
   quoteRef.current = (optType, strike, expiry) =>
     (chainQuotes?.expiry === expiry ? quoteOf(optType, strike) : null);
@@ -724,7 +747,9 @@ function SimulatorInner() {
         // contract and no quantity is not a position, and leaving it blank
         // makes every figure below read zero for a structure that looks set.
         const hasQty = String(l.form.opt_entry_qty ?? "").trim() !== "" && Number(l.form.opt_entry_qty) !== 0;
-        const qty = hasQty ? l.form.opt_entry_qty : (side === "SHORT" ? "-1" : "1");
+        // One LOT, which on a US equity option is a hundred shares. This was a
+        // literal 1, so clicking a strike put on a single share.
+        const qty = hasQty ? l.form.opt_entry_qty : String(side === "SHORT" ? -lotSize : lotSize);
         return {
           ...l,
           form: {
@@ -790,7 +815,8 @@ function SimulatorInner() {
       strike: l.form.options_strike || "",
       optType, side,
       expiry: l.form.expiry || "",
-      size: l.form.opt_entry_qty === "" ? "" : (Math.abs(qty) || ""),
+      // Shown in contracts; the form underneath keeps shares.
+      size: l.form.opt_entry_qty === "" ? "" : (toLots(Math.abs(qty), lotSize) || ""),
       price: l.form.opt_entry_price ?? "",
       exit: l.form.opt_exit_price ?? "",
       mm: l.form.market_making_pl ?? "",
@@ -804,7 +830,7 @@ function SimulatorInner() {
       pnl: optPnl === null && !hasMm ? null
         : Math.round(((optPnl || 0) + mm) * 1e6) / 1e6,
     };
-  }), [legs, liveMids, quoteOf]);
+  }), [legs, liveMids, quoteOf, lotSize]);
 
   // The two closing figures, which are the only inputs that may move the
   // booked total.
@@ -871,10 +897,12 @@ function SimulatorInner() {
     if (field === "exit") return setLegField(idx, "opt_exit_price", value);
     if (field === "mm") return setLegField(idx, "market_making_pl", value);
     if (field === "strike") return setLegField(idx, "options_strike", value);
-    // Size is typed unsigned; the sign is the leg's direction and belongs to
-    // the type, not to anything anyone should have to key in.
-    const abs = Math.abs(Number(value));
-    const signed = value === "" || !Number.isFinite(abs) ? ""
+    // Size is typed unsigned and in contracts; the sign is the leg's
+    // direction and belongs to the type, and the hundred is the contract --
+    // neither is something anyone should have to key in.
+    const shares = toQuantity(value, lotSize);
+    const abs = Math.abs(Number(shares));
+    const signed = shares === "" || !Number.isFinite(abs) ? ""
       : String(legs[idx]?.type?.endsWith("SHORT") ? -abs : abs);
     return setLegField(idx, "opt_entry_qty", signed);
   }
@@ -2106,6 +2134,7 @@ function SimulatorInner() {
           />
           <SelectedLegsStrip
             legs={stripLegs}
+            lotSize={lotSize}
             onAdd={addLeg}
             onChange={stripChange}
             onSide={(idx, side) => changeLegType(idx, `${(legs[idx]?.type || "CALL LONG").split(" ")[0]} ${side}`)}

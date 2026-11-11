@@ -83,10 +83,17 @@ function SideCells({ side, optType, strike, expiry, mirrored, pickedOf, onPick }
 
 /* ── the grid ─────────────────────────────────────────────── */
 
+// How many strikes either side of the money to draw. The wide settings are
+// there for the wings -- a far out-of-the-money hedge can sit thirty strikes
+// out, and before these existed the only way to reach it was "All strikes",
+// which on a heavily listed name is several hundred rows.
 const WINDOWS = [
   { n: 4, label: "±4 strikes" },
   { n: 6, label: "±6 strikes" },
   { n: 10, label: "±10 strikes" },
+  { n: 20, label: "±20 strikes" },
+  { n: 30, label: "±30 strikes" },
+  { n: 50, label: "±50 strikes" },
   { n: 0, label: "All strikes" },
 ];
 

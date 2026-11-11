@@ -28,9 +28,21 @@ const Box = ({ wide, ...props }) => (
   />
 );
 
-const COLUMNS = ["Strike", "Type", "Expiration", "S/L", "Size", "Price", "Exit", "IV", "MM Loss", "P&L", ""];
+const columnsFor = (lotSize) => [
+  "Strike", "Type", "Expiration", "S/L",
+  lotSize > 1 ? "Size (lots)" : "Size",
+  "Price", "Exit", "IV", "MM Loss", "P&L", "",
+];
 
-export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemove, onAdd }) {
+/**
+ * `lotSize` is how many of the underlying one unit of Size is worth -- 100 on
+ * a US equity option, 1 on a Deribit coin option. Size is typed and shown in
+ * lots, and the shares that makes is printed under the box: the book stores
+ * shares and prices per share, so what is actually being recorded should not
+ * have to be taken on trust.
+ */
+export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemove, onAdd, lotSize = 1 }) {
+  const COLUMNS = columnsFor(lotSize);
   if (!legs.length) {
     return (
       <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center">
@@ -78,7 +90,13 @@ export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemov
               </td>
               <td className="px-2 py-1.5">
                 <Box value={l.size ?? ""} placeholder="—"
+                  title={lotSize > 1 ? `1 = ${lotSize} shares (one contract)` : undefined}
                   onChange={(e) => onChange?.(l.key, "size", e.target.value)} />
+                {lotSize > 1 && Number(l.size) > 0 && (
+                  <span className="mt-0.5 block text-right text-[10px] tabular-nums text-slate-500">
+                    {(Number(l.size) * lotSize).toLocaleString()} sh
+                  </span>
+                )}
               </td>
               <td className="px-2 py-1.5">
                 <Box wide value={l.price ?? ""} placeholder="—"
