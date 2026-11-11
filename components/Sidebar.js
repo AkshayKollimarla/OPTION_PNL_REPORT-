@@ -11,6 +11,7 @@ const nav = [
   { href: "/manual-entry",   label: "Entry Fields",   icon: PlusIcon   },
   { href: "/entries-log",    label: "Entries Log",    icon: ListIcon   },
   { href: "/analysis",       label: "Analysis",       icon: ChartIcon  },
+  { href: "/results",        label: "Results",        icon: CalendarIcon },
 ];
 
 const optionsNav = [
@@ -213,6 +214,16 @@ function BellIcon({ className }) {
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M13.73 21a2 2 0 0 1-3.46 0" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CalendarIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M3 10h18M8 3v4M16 3v4" strokeLinecap="round" />
+      <circle cx="12" cy="15" r="1.4" fill="currentColor" stroke="none" />
     </svg>
   );
 }
