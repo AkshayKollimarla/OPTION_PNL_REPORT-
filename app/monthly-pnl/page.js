@@ -48,6 +48,10 @@ export default function MonthlyPnlPage() {
   const [account, setAccount] = useState("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  // Which date files a structure. Entry by default: it is the date the
+  // position is known by -- the strategies are named for it, HOOD-29THJUNE --
+  // and every closed structure has one, where three have no end date at all.
+  const [basis, setBasis] = useState("entered");
 
   useEffect(() => {
     fetch("/api/monthly-pnl", { cache: "no-store" })
@@ -86,13 +90,15 @@ export default function MonthlyPnlPage() {
     // A structure with no end date cannot be shown to fall inside a range, so
     // a range excludes it rather than keeping it on the grounds that nothing
     // ruled it out. The page says so where they are listed.
+    // The range filters on the SAME date the page is filed by, so the dates
+    // on screen always sit inside the range that produced them.
     const picked = (!from && !to) ? byAccount : byAccount.filter((r) => {
-      const d = String(r.ended || "");
+      const d = String(r[basis] || "");
       if (!d) return false;
       return (!from || d >= from) && (!to || d <= to);
     });
-    return buildMonths(picked);
-  }, [rows, account, from, to]);
+    return buildMonths(picked, basis);
+  }, [rows, account, from, to, basis]);
 
   const ranged = Boolean(from || to);
 
@@ -103,10 +109,18 @@ export default function MonthlyPnlPage() {
       { month: m.label, coin: "TOTAL", day: "", ...m.totals }];
     const slug = [
       account === "all" ? null : accountLabel(account).toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+      basis === "ended" ? "by-close" : "by-entry",
       ranged ? `${from || "start"}_${to || "end"}` : null,
     ].filter(Boolean).join("-");
+    // The export carries BOTH dates whichever way the page is filed, so a
+    // spreadsheet built from it can be re-cut without coming back here.
     downloadCsv(`trade-log-${m.key}${slug ? "-" + slug : ""}.csv`,
-      toCsv(rows, [{ key: "month", label: "Month" }, ...COLUMNS]));
+      toCsv(rows, [
+        { key: "month", label: "Month" },
+        ...COLUMNS,
+        { key: "entered", label: "Entry date" },
+        { key: "ended", label: "Close date" },
+      ]));
   };
 
   return (
@@ -115,13 +129,14 @@ export default function MonthlyPnlPage() {
         <div>
           <h1 className="text-xl font-bold text-slate-800">Monthly PnL</h1>
           <p className="text-[13px] text-slate-500">
-            Every structure that has been closed, logged under the month it closed in. Nothing here is
-            typed twice — a strategy appears the moment it is marked closed with its figures.
+            Every structure that has been closed, filed under the month it was{" "}
+            {basis === "ended" ? "closed in" : "entered in"}. Nothing here is typed twice — a strategy
+            appears the moment it is marked closed with its figures.
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <label className="block">
-            <span className="mb-1 block text-[11px] font-semibold text-slate-600">Closed from</span>
+            <span className="mb-1 block text-[11px] font-semibold text-slate-600">{basis === "ended" ? "Closed from" : "Entered from"}</span>
             <input type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)}
               className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] text-slate-700" />
           </label>
@@ -137,6 +152,14 @@ export default function MonthlyPnlPage() {
               Clear filters
             </button>
           )}
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-semibold text-slate-600">File by</span>
+            <select value={basis} onChange={(e) => setBasis(e.target.value)}
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] font-semibold text-slate-700">
+              <option value="entered">Entry date</option>
+              <option value="ended">Close date</option>
+            </select>
+          </label>
           {(accounts.named.length + (accounts.none ? 1 : 0)) > 1 && (
             <label className="block">
               <span className="mb-1 block text-[11px] font-semibold text-slate-600">Account</span>
@@ -173,7 +196,9 @@ export default function MonthlyPnlPage() {
           {!ranged && account === "all"
             ? "Nothing closed yet. Set a strategy’s status to Closed in the simulator and it will appear here."
             : `Nothing closed${account === "all" ? "" : ` under ${accountLabel(account)}`}${
-                ranged ? ` between ${from || "the start"} and ${to || "today"}` : ""}.`}
+                ranged
+                  ? ` ${basis === "ended" ? "closed" : "entered"} between ${from || "the start"} and ${to || "today"}`
+                  : ""}.`}
         </div>
       )}
 
@@ -212,7 +237,16 @@ export default function MonthlyPnlPage() {
                       {l.coin}
                       {l.account && <span className="ml-2 text-[11px] font-normal text-slate-500">{l.account}</span>}
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap font-medium text-slate-600">{l.day}</td>
+                    {/* The basis date leads; the other is kept underneath so
+                        switching the basis never hides a date that was there. */}
+                    <td className="px-3 py-2 whitespace-nowrap font-medium text-slate-600">
+                      {l.day || "—"}
+                      <span className="block text-[11px] font-normal text-slate-400">
+                        {basis === "ended"
+                          ? (l.enteredDay ? `in ${l.enteredDay}` : "")
+                          : (l.endedDay ? `out ${l.endedDay}` : "no end date")}
+                      </span>
+                    </td>
                     <Cell v={l.optionPnl} />
                     <Cell v={l.futuresPnl} />
                     <Cell v={l.optionsLoss} tone="loss" />
@@ -244,10 +278,13 @@ export default function MonthlyPnlPage() {
       {data?.undated?.length > 0 && (
         <section className="overflow-hidden rounded-xl border border-amber-200 bg-amber-50">
           <div className="border-b border-amber-200 px-4 py-2.5">
-            <h2 className="text-sm font-bold text-amber-800">Closed with no end date</h2>
+            <h2 className="text-sm font-bold text-amber-800">
+              Closed with no {basis === "ended" ? "end" : "entry"} date
+            </h2>
             <p className="text-[11px] text-amber-700">
-              These are closed but carry no end date, so there is no month to file them under. Set an end
-              date on each and it will drop into place.{ranged && " A date range leaves them out, since there is no date to place them inside it."}
+              These are closed but carry no {basis === "ended" ? "end" : "entry"} date, so there is no month
+              to file them under. Set one on each and it will drop into place.
+              {ranged && " A date range leaves them out, since there is no date to place them inside it."}
             </p>
           </div>
           <ul className="divide-y divide-amber-200">

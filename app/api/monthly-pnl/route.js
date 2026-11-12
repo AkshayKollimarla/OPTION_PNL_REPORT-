@@ -20,6 +20,10 @@ export async function GET() {
       SELECT COALESCE(t.group_id, CONCAT('#', t.id))          AS \`key\`,
              MIN(t.token)                                      AS token,
              MIN(a.name)                                       AS account,
+             -- Both dates travel with the row so the page can file by either.
+             -- The legs of a structure share an entry date; MIN takes the
+             -- earliest if they ever differ, which is when it was put on.
+             DATE_FORMAT(MIN(t.entry_date), '%Y-%m-%d')        AS entered,
              DATE_FORMAT(MAX(t.end_date), '%Y-%m-%d')          AS ended,
              SUM(COALESCE(t.opt_pnl, 0))                       AS opt_pnl,
              SUM(COALESCE(t.fut_pnl, 0))                       AS fut_pnl,
@@ -29,7 +33,7 @@ export async function GET() {
         LEFT JOIN trading_accounts a ON a.id = t.account_id
        WHERE t.status = 'closed'
        GROUP BY \`key\`
-       ORDER BY ended DESC`);
+       ORDER BY ended DESC, entered DESC`);
 
     // The lines, ungrouped. Grouping into months happens in the page so that
     // narrowing to one account regroups and re-totals instantly, off the rows
