@@ -62,6 +62,54 @@ function PriceCell({ side, optType, strike, expiry, pickedOf, onPick }) {
   );
 }
 
+/* ── short / long, revealed on hover ──────────────────────── */
+
+/**
+ * The two sides as named actions, next to the strike.
+ *
+ * The prices above are already clickable -- the bid sells, the ask buys -- but
+ * that has to be known before the chain can be used. These say it outright.
+ * They are the same two actions and carry the same two prices, so a Short here
+ * and a click on the bid are one thing.
+ *
+ * Hidden until the row is hovered, so eighty rows of buttons do not compete
+ * with the numbers, and shown permanently once a leg sits on that contract:
+ * a position is state worth seeing without hunting for it. They also appear on
+ * keyboard focus, or they could never be reached without a mouse.
+ */
+function PositionCell({ side, optType, strike, expiry, pickedOf, onPick }) {
+  const s = side || {};
+  const isShort = pickedOf(optType, "SHORT", strike);
+  const isLong = pickedOf(optType, "LONG", strike);
+  const held = isShort || isLong;
+
+  const btn = (dir, label, price, on, tone) => (
+    <button
+      type="button"
+      disabled={price === null || price === undefined}
+      title={`${dir === "SHORT" ? "Sell" : "Buy"} ${optType.toLowerCase()} ${strike} at ${fmtPx(price)}`}
+      onClick={() => onPick({ optType, side: dir, strike, expiry, price, iv: s.iv })}
+      className={`rounded border px-1.5 py-0.5 text-[11px] font-semibold transition-colors disabled:cursor-default disabled:border-slate-200 disabled:bg-white disabled:text-slate-300 ${tone}`}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <td className="px-2 py-1">
+      <div className={`flex items-center justify-center gap-1 transition-opacity ${
+        held ? "" : "opacity-0 focus-within:opacity-100 group-hover:opacity-100"}`}>
+        {btn("SHORT", "Short", s.bid, isShort,
+          isShort ? "border-red-200 bg-red-100 font-bold text-red-800 ring-1 ring-red-400"
+                  : "border-red-200 bg-white text-red-700 hover:bg-red-100")}
+        {btn("LONG", "Long", s.ask, isLong,
+          isLong ? "border-blue-200 bg-blue-100 font-bold text-blue-700 ring-1 ring-blue-400"
+                 : "border-blue-200 bg-white text-blue-700 hover:bg-blue-100")}
+      </div>
+    </td>
+  );
+}
+
 /* ── one side of one strike ───────────────────────────────── */
 
 function SideCells({ side, optType, strike, expiry, mirrored, pickedOf, onPick }) {
@@ -75,9 +123,14 @@ function SideCells({ side, optType, strike, expiry, mirrored, pickedOf, onPick }
     iv: cell("iv", fmtIv(s.iv)),
     price: <PriceCell key="price" side={side} optType={optType} strike={strike}
       expiry={expiry} pickedOf={pickedOf} onPick={onPick} />,
+    position: <PositionCell key="position" side={side} optType={optType} strike={strike}
+      expiry={expiry} pickedOf={pickedOf} onPick={onPick} />,
   };
   // The puts read outward from the strike, so their columns run the other way.
-  const order = mirrored ? ["price", "iv", "be", "delta"] : ["delta", "be", "iv", "price"];
+  // Position sits innermost on both sides, against the strike it belongs to.
+  const order = mirrored
+    ? ["position", "price", "iv", "be", "delta"]
+    : ["delta", "be", "iv", "price", "position"];
   return <>{order.map((k) => by[k])}</>;
 }
 
@@ -97,7 +150,7 @@ const WINDOWS = [
   { n: 0, label: "All strikes" },
 ];
 
-const COLS_PER_SIDE = 4;
+const COLS_PER_SIDE = 5;
 
 // One number drives the price buttons and the BID / ASK labels above them.
 const PRICE_W = "w-[62px]";
@@ -201,8 +254,14 @@ export default function OptionChainGrid({
     </th>
   );
   const hc = h("c"), hp = h("p");
-  const callHeads = [hc("Delta"), hc("BE"), hc("IV"), priceHead("c")];
-  const putHeads = [priceHead("p"), hp("IV"), hp("BE"), hp("Delta")];
+  const pos = (sideKey) => (
+    <th key={`${sideKey}-position`}
+      className="px-2 py-1 text-center text-[11px] font-bold uppercase tracking-wide text-slate-700">
+      Position
+    </th>
+  );
+  const callHeads = [hc("Delta"), hc("BE"), hc("IV"), priceHead("c"), pos("c")];
+  const putHeads = [pos("p"), priceHead("p"), hp("IV"), hp("BE"), hp("Delta")];
 
   return (
     <div className="rounded-xl border border-slate-100 bg-slate-50">
@@ -260,7 +319,7 @@ export default function OptionChainGrid({
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[620px] border-collapse text-[13px]">
+          <table className="w-full min-w-[760px] border-collapse text-[13px]">
             <thead>
               <tr className="border-b border-slate-100">
                 {showCalls && <th colSpan={COLS_PER_SIDE} className="py-1 text-center text-xs font-bold uppercase tracking-wide text-slate-700">Calls</th>}
@@ -292,7 +351,9 @@ export default function OptionChainGrid({
               {open && rows.map((r, i) => (
                 <Fragment key={r.strike}>
                   {i === spotAt && data?.underlying != null && <SpotBand cols={cols} token={data.token} price={data.underlying} />}
-                  <tr className="border-b border-slate-100 last:border-0 hover:bg-slate-100">
+                  {/* `group` is what lets the Short/Long buttons appear for
+                      the hovered row and no other. */}
+                  <tr className="group border-b border-slate-100 last:border-0 hover:bg-slate-100">
                     {showCalls && (
                       <SideCells side={r.call} optType="CALL" strike={r.strike}
                         expiry={expiry} pickedOf={pickedOf} onPick={onPick} />

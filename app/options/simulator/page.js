@@ -691,6 +691,16 @@ function SimulatorInner() {
     return (optType === "CALL" ? row?.call : row?.put) || null;
   }, [chainQuotes]);
 
+  // The strikes listed for the expiry the chain is showing, for the picker on
+  // each leg. Keyed off the strikes themselves rather than the payload: the
+  // chain repolls every two seconds and a fresh array each time would rebuild
+  // the dropdown under the cursor, closing it as it was being used. Strikes
+  // are added intraday but rarely, so the identity holds all session.
+  const strikeKey = (chainQuotes?.rows || []).map((r) => r.strike).join(",");
+  const chainStrikes = useMemo(
+    () => (strikeKey ? strikeKey.split(",").map(Number).filter(Number.isFinite) : []),
+    [strikeKey]);
+
   // What one unit in the Size box is worth. A US equity option contract is 100
   // shares, so 1 means one contract and 2 means two. A Deribit leg is sized in
   // the coin itself and stays 1 for 1 -- multiplying that by a hundred would
@@ -815,6 +825,11 @@ function SimulatorInner() {
       strike: l.form.options_strike || "",
       optType, side,
       expiry: l.form.expiry || "",
+      // Every strike on the chain, so a leg can be walked up or down without
+      // knowing what is listed. Offered only where the leg sits on the expiry
+      // the chain is showing -- anywhere else there is nothing to offer and
+      // the box stays typable.
+      choices: l.form.expiry && chainQuotes?.expiry === l.form.expiry ? chainStrikes : [],
       // Shown in contracts; the form underneath keeps shares.
       size: l.form.opt_entry_qty === "" ? "" : (toLots(Math.abs(qty), lotSize) || ""),
       price: l.form.opt_entry_price ?? "",
@@ -830,7 +845,7 @@ function SimulatorInner() {
       pnl: optPnl === null && !hasMm ? null
         : Math.round(((optPnl || 0) + mm) * 1e6) / 1e6,
     };
-  }), [legs, liveMids, quoteOf, lotSize]);
+  }), [legs, liveMids, quoteOf, lotSize, chainStrikes, chainQuotes?.expiry]);
 
   // The two closing figures, which are the only inputs that may move the
   // booked total.
@@ -893,6 +908,26 @@ function SimulatorInner() {
   }
 
   function stripChange(idx, field, value) {
+    // A strike chosen from the picker brings its price with it. Picking a
+    // contract is picking what it costs, and leaving the old strike's premium
+    // sitting under a new strike would be a P&L computed against a price that
+    // was never on offer.
+    //
+    // The side decides which half of the book fills it, the same way a click
+    // in the chain does: a long buys at the ask, a short sells at the bid.
+    // Only the picker does this -- a strike typed into the fallback box
+    // leaves the price alone, as it always has.
+    if (field === "strikePick") {
+      setLegField(idx, "options_strike", value);
+      const [optType, side] = (legs[idx]?.type || "").split(" ");
+      const q = quoteOf(optType, Number(value));
+      const px = side === "SHORT" ? q?.bid : q?.ask;
+      // No price on that side is not a price of zero: the strike moves and
+      // the premium is left to be filled in.
+      if (px !== null && px !== undefined) setLegField(idx, "opt_entry_price", String(px));
+      if (q?.iv !== null && q?.iv !== undefined) setLegField(idx, "iv", String(Math.round(q.iv * 1000) / 10));
+      return;
+    }
     if (field === "price") return setLegField(idx, "opt_entry_price", value);
     if (field === "exit") return setLegField(idx, "opt_exit_price", value);
     if (field === "mm") return setLegField(idx, "market_making_pl", value);

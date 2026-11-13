@@ -28,6 +28,31 @@ const Box = ({ wide, ...props }) => (
   />
 );
 
+/**
+ * The strike, chosen from what is actually listed.
+ *
+ * A strike the leg already carries that the chain does not list is kept at the
+ * top of the list and marked, so opening the picker on an older structure
+ * cannot silently move it to a neighbouring strike.
+ */
+function StrikePicker({ value, choices, onPick }) {
+  const current = value === "" || value === null || value === undefined ? null : Number(value);
+  const listed = current !== null && choices.some((c) => Number(c) === current);
+  return (
+    <select
+      value={current === null ? "" : String(current)}
+      onChange={(e) => onPick(e.target.value)}
+      className="w-24 rounded border border-slate-200 bg-white px-1.5 py-1 text-right text-[13px] font-semibold tabular-nums text-slate-700 focus:border-blue-400 focus:outline-none"
+    >
+      {current === null && <option value="">—</option>}
+      {current !== null && !listed && (
+        <option value={String(current)}>{current} (not listed)</option>
+      )}
+      {choices.map((c) => <option key={c} value={String(c)}>{c}</option>)}
+    </select>
+  );
+}
+
 const columnsFor = (lotSize) => [
   "Strike", "Type", "Expiration", "S/L",
   lotSize > 1 ? "Size (lots)" : "Size",
@@ -70,9 +95,19 @@ export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemov
         <tbody>
           {legs.map((l) => (
             <tr key={l.key} className="border-b border-slate-100 last:border-0">
+              {/* Every strike listed for this expiry, up and down, rather
+                  than a number to be known and typed. The box underneath is
+                  kept for a leg the chain cannot offer strikes for -- another
+                  expiry, or no chain loaded -- so nothing becomes unreachable
+                  when the picker has nothing to show. */}
               <td className="px-2 py-1.5">
-                <Box value={l.strike ?? ""} placeholder="—"
-                  onChange={(e) => onChange?.(l.key, "strike", e.target.value)} />
+                {l.choices?.length ? (
+                  <StrikePicker value={l.strike} choices={l.choices}
+                    onPick={(v) => onChange?.(l.key, "strikePick", v)} />
+                ) : (
+                  <Box value={l.strike ?? ""} placeholder="—"
+                    onChange={(e) => onChange?.(l.key, "strike", e.target.value)} />
+                )}
               </td>
               <td className="px-2 py-1.5 font-medium text-slate-600">{l.optType === "CALL" ? "Call" : "Put"}</td>
               <td className="px-2 py-1.5 whitespace-nowrap text-slate-600">{l.expiry || "—"}</td>
