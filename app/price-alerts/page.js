@@ -13,6 +13,14 @@ const money = (v, places = 2) =>
     ? "—"
     : Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: places });
 
+// Quantities are not prices: a stock hedge is 270 whole shares and a BTC one
+// is 0.9 of a coin, so this keeps what is there and pads nothing on.
+const qty = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+};
+
 export default function PriceAlertsPage() {
   const [rows, setRows]       = useState([]);
   const [telegram, setTg]     = useState(null);
@@ -302,6 +310,25 @@ export default function PriceAlertsPage() {
                           ? "watched on its own, independent of any strategy"
                           : `entered ${row.entry_date || "—"}${row.expiry ? ` · expiry ${row.expiry}` : ""}`}
                       </p>
+                      {/* The hedge the band is measured from. The upper and
+                          lower levels below are this price plus and minus a
+                          distance, so showing it here is what makes them
+                          checkable rather than numbers to be believed.
+                          A structure with no futures leg says nothing. */}
+                      {row.futPrice != null && (
+                        <p className="mt-0.5 text-[11px] text-slate-500">
+                          futures{" "}
+                          {row.futQty != null && (
+                            <>
+                              <span className={`font-semibold ${row.futQty < 0 ? "text-red-600" : "text-emerald-600"}`}>
+                                {qty(Math.abs(row.futQty))} {row.futQty < 0 ? "short" : "long"}
+                              </span>
+                              {" @ "}
+                            </>
+                          )}
+                          <span className="font-semibold tabular-nums text-slate-600">{money(row.futPrice)}</span>
+                        </p>
+                      )}
                     </div>
                     <div className="text-right">
                       <p className="text-2xl font-bold tabular-nums text-slate-800">{money(row.price)}</p>
