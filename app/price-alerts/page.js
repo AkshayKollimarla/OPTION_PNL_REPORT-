@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /* The watch list is the open strategies themselves, so there is nothing to
    add or delete here: a structure opened on the Options Dashboard appears,
@@ -37,7 +37,14 @@ export default function PriceAlertsPage() {
   const [probe, setProbe]     = useState(null);
   const [adding, setAdding]   = useState(false);
 
+  // One refresh at a time. At a second apart a slow answer would otherwise
+  // overlap the next request, and two in flight can land out of order and
+  // show an older price after a newer one.
+  const inFlight = useRef(false);
+
   const load = useCallback(() => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     fetch("/api/price-alerts", { cache: "no-store" })
       .then((r) => r.json())
       .then((j) => {
@@ -48,15 +55,30 @@ export default function PriceAlertsPage() {
         setError(null);
       })
       .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
+      .finally(() => { inFlight.current = false; setLoading(false); });
   }, []);
 
   useEffect(() => { load(); }, [load]);
-  // The price is the point of the page, so it keeps itself current. Edits in
-  // progress are held in `draft` and survive the refresh.
+  // Every second. The price and the P&L beside it are the point of the page,
+  // and at twenty seconds a figure could be a third of a minute old while
+  // reading as current -- which on a card whose job is to say how close a
+  // coin is to its limit is the one thing it must not do.
+  //
+  // The venues do not see this rate: quotes are cached just under a second on
+  // the server and shared between every caller, so a second tab, a phone and
+  // the alert worker all read the same fetch. Edits in progress are held in
+  // `draft` and survive the refresh.
   useEffect(() => {
-    const t = setInterval(load, 20_000);
-    return () => clearInterval(t);
+    const tick = () => {
+      // A background tab polling three venues every second is load nobody is
+      // reading. It catches up the moment it is looked at again.
+      if (typeof document !== "undefined" && document.hidden) return;
+      load();
+    };
+    const t = setInterval(tick, 1_000);
+    const onShow = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", onShow);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", onShow); };
   }, [load]);
 
   // An empty box means "follow the limit", so only a value the user typed is
@@ -352,12 +374,17 @@ export default function PriceAlertsPage() {
                     </div>
                   )}
 
-                  {/* The band, and where the alerts sit inside it */}
+                  {/* The band, where the alerts sit inside it, and what each
+                      side is worth if the coin gets there. The scenario goes
+                      in the same cell as the limit it is measured at, so
+                      "upside" is unmistakably the number printed above it. */}
                   <div className="grid grid-cols-2 gap-px bg-slate-100">
                     <Limit dir="up"   title="Upper limit" limit={row.upper} from={row.upperFrom}
-                           trigger={row.upperTrigger} price={row.price} />
+                           trigger={row.upperTrigger} price={row.price}
+                           scenario={row.pnl?.scenarios?.upside} />
                     <Limit dir="down" title="Lower limit" limit={row.lower} from={row.lowerFrom}
-                           trigger={row.lowerTrigger} price={row.price} />
+                           trigger={row.lowerTrigger} price={row.price}
+                           scenario={row.pnl?.scenarios?.downside} />
                   </div>
 
                   {/* The three things that are yours to set */}
@@ -531,7 +558,7 @@ function Pnl({ pnl }) {
 
 /* One side of the band: the limit itself, where it came from, and how far the
    price has to travel to reach it. */
-function Limit({ dir, title, limit, from, price, trigger }) {
+function Limit({ dir, title, limit, from, price, trigger, scenario }) {
   const away = Number.isFinite(Number(price)) && limit != null
     ? (dir === "up" ? Number(limit) - Number(price) : Number(price) - Number(limit))
     : null;
@@ -552,7 +579,38 @@ function Limit({ dir, title, limit, from, price, trigger }) {
         {away !== null && ` · ${close ? "past it" : `${money(Math.abs(away))} away`}`}
       </p>
       <p className="text-[11px] font-medium text-slate-500">alerts at {money(trigger)}</p>
+
+      {/* What the structure makes at this price.
+          `expiry` is the plan: the options finish worth their intrinsic
+          value and nothing more. `today` is the same price reached NOW,
+          with every option still carrying its time value -- routinely the
+          worse of the two on the side the short strikes are on, and the one
+          that actually shows up in the account if the coin gaps there this
+          afternoon. Seeing only the first is what makes a limit being
+          touched feel like a surprise. */}
+      {scenario && (
+        <div className="mt-2 space-y-0.5 border-t border-slate-200/70 pt-1.5">
+          <Scen label="expiry" value={scenario.expiry} />
+          <Scen label="today"  value={scenario.today} />
+          {scenario.assumed > 0 && (
+            <p className="pt-0.5 text-[9px] leading-tight text-amber-700">
+              today assumes a volatility for {scenario.assumed} leg{scenario.assumed === 1 ? "" : "s"}
+            </p>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+/* One scenario figure. The label is kept narrow and the number pushed right
+   so the two cells line up across the card and can be read down a column. */
+function Scen({ label, value }) {
+  return (
+    <p className="flex items-baseline justify-between gap-2">
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+      <span className={`text-xs font-bold tabular-nums ${tone(value)}`}>{signed(value)}</span>
+    </p>
   );
 }
 
