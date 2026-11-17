@@ -374,18 +374,26 @@ export default function PriceAlertsPage() {
                     </div>
                   )}
 
-                  {/* The band, where the alerts sit inside it, and what each
-                      side is worth if the coin gets there. The scenario goes
-                      in the same cell as the limit it is measured at, so
-                      "upside" is unmistakably the number printed above it. */}
+                  {/* The band, and where the alerts sit inside it */}
                   <div className="grid grid-cols-2 gap-px bg-slate-100">
                     <Limit dir="up"   title="Upper limit" limit={row.upper} from={row.upperFrom}
-                           trigger={row.upperTrigger} price={row.price}
-                           scenario={row.pnl?.scenarios?.upside} />
+                           trigger={row.upperTrigger} price={row.price} />
                     <Limit dir="down" title="Lower limit" limit={row.lower} from={row.lowerFrom}
-                           trigger={row.lowerTrigger} price={row.price}
-                           scenario={row.pnl?.scenarios?.downside} />
+                           trigger={row.lowerTrigger} price={row.price} />
                   </div>
+
+                  {/* What the strategy makes at the two prices it was built
+                      around. A row of its own rather than inside the cells
+                      above, because it is NOT measured at those limits: the
+                      recorded futures price plus its distance and the short
+                      strike differ on 74 of 81 structures on this book, so
+                      each side prints the price it actually refers to. */}
+                  {row.pnl?.scenarios && (
+                    <div className="grid grid-cols-2 gap-px bg-slate-100">
+                      <Scenario title="Upside"   s={row.pnl.scenarios.upside} />
+                      <Scenario title="Downside" s={row.pnl.scenarios.downside} />
+                    </div>
+                  )}
 
                   {/* The three things that are yours to set */}
                   <div className="space-y-3 px-5 py-4">
@@ -558,7 +566,7 @@ function Pnl({ pnl }) {
 
 /* One side of the band: the limit itself, where it came from, and how far the
    price has to travel to reach it. */
-function Limit({ dir, title, limit, from, price, trigger, scenario }) {
+function Limit({ dir, title, limit, from, price, trigger }) {
   const away = Number.isFinite(Number(price)) && limit != null
     ? (dir === "up" ? Number(limit) - Number(price) : Number(price) - Number(limit))
     : null;
@@ -579,29 +587,61 @@ function Limit({ dir, title, limit, from, price, trigger, scenario }) {
         {away !== null && ` · ${close ? "past it" : `${money(Math.abs(away))} away`}`}
       </p>
       <p className="text-[11px] font-medium text-slate-500">alerts at {money(trigger)}</p>
+    </div>
+  );
+}
 
-      {/* What the structure makes at this price.
-          `expiry` is the plan: the options finish worth their intrinsic
-          value and nothing more. `today` is the same price reached NOW,
-          with every option still carrying its time value -- routinely the
-          worse of the two on the side the short strikes are on, and the one
-          that actually shows up in the account if the coin gaps there this
-          afternoon. Seeing only the first is what makes a limit being
-          touched feel like a surprise. */}
-      {scenario && (
-        <div className="mt-2 space-y-0.5 border-t border-slate-200/70 pt-1.5">
-          <Scen label="expiry" value={scenario.expiry} />
-          <Scen label="today"  value={scenario.today} />
-          {scenario.assumed > 0 && (
-            <p className="pt-0.5 text-[9px] leading-tight text-amber-700">
-              today assumes a volatility for {scenario.assumed} leg{scenario.assumed === 1 ? "" : "s"}
-            </p>
-          )}
-        </div>
+/* One side's plan: what the strategy makes if the coin reaches the price it
+   was built around.
+
+   `expiry` is read straight off the strategy -- the same estimated net the
+   Options Dashboard shows, so the two cannot disagree. `today` is that same
+   price reached NOW, with every option still carrying its time value,
+   rebuilt exactly as the simulator rebuilds it: the leg's own recorded
+   volatility, not one solved from the market. That is what keeps it still.
+   Priced off live quotes it was more accurate and moved every second, and a
+   planning figure that will not sit still is not a planning figure.
+
+   Both are routinely far apart, and the gap is the point: a structure can be
+   comfortably profitable at expiry and deeply underwater at the very same
+   price today. */
+function Scenario({ title, s }) {
+  if (!s) {
+    return (
+      <div className="bg-white px-5 py-3">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{title}</p>
+        <p className="mt-1 text-[11px] text-slate-400">not recorded on this strategy</p>
+      </div>
+    );
+  }
+  return (
+    <div className="bg-white px-5 py-3">
+      <p className="flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{title}</span>
+        {/* The price these two figures refer to. Printed because it is NOT
+            the limit above: it is the recorded futures price plus or minus
+            the recorded distance, which is a different number on almost
+            every structure here. */}
+        {s.target != null && (
+          <span className="text-[10px] tabular-nums text-slate-400">at {money(s.target)}</span>
+        )}
+      </p>
+      <div className="mt-1 space-y-0.5">
+        <Scen label="expiry" value={s.expiry} />
+        <Scen label="today"  value={s.today} />
+      </div>
+      {s.assumed > 0 && (
+        <p className="mt-1 text-[9px] leading-tight text-amber-700">
+          today assumes {DEFAULT_IV_LABEL} volatility for {s.assumed} leg{s.assumed === 1 ? "" : "s"}
+        </p>
       )}
     </div>
   );
 }
+
+// The fallback the scenarios use when a leg carries no recorded volatility --
+// the same one the simulator falls back to.
+const DEFAULT_IV_LABEL = "30%";
 
 /* One scenario figure. The label is kept narrow and the number pushed right
    so the two cells line up across the card and can be read down a column. */
@@ -609,7 +649,7 @@ function Scen({ label, value }) {
   return (
     <p className="flex items-baseline justify-between gap-2">
       <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</span>
-      <span className={`text-xs font-bold tabular-nums ${tone(value)}`}>{signed(value)}</span>
+      <span className={`text-sm font-bold tabular-nums ${tone(value)}`}>{signed(value)}</span>
     </p>
   );
 }
