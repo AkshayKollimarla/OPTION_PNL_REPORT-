@@ -29,7 +29,9 @@ export async function GET(request) {
         delayedMinutes: delayedMinutes ?? null,
       });
     }
-    return NextResponse.json(await buildRows());
+    // The page shows what each structure has made, so it asks for the option
+    // quotes too. The alert worker calls buildRows without this.
+    return NextResponse.json(await buildRows({ pnl: true }));
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }

@@ -336,6 +336,10 @@ export default function PriceAlertsPage() {
                         {row.priceSource || "no feed"}
                         {row.delayedMinutes ? ` · ${row.delayedMinutes} min behind` : ""}
                       </p>
+                      {/* What it has made so far, beside what it is trading
+                          at. A manual alert is a level, not a position, so it
+                          has none. */}
+                      {row.pnl && <Pnl pnl={row.pnl} />}
                     </div>
                   </div>
 
@@ -468,6 +472,59 @@ export default function PriceAlertsPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/* Mark-to-market, beside the live price: the options, the futures hedge, and
+   the two added.
+
+   Signed and always with its sign, because the sign is the point: a bare
+   "232" next to a price reads as another price. Colour alone would not carry
+   it either -- on a phone, or printed, or to anyone who does not separate red
+   from green. */
+const signed = (v) =>
+  v === null || v === undefined || !Number.isFinite(Number(v))
+    ? "—"
+    : `${Number(v) > 0 ? "+" : Number(v) < 0 ? "−" : ""}${money(Math.abs(Number(v)))}`;
+
+const tone = (v) =>
+  v === null || v === undefined || !Number.isFinite(Number(v)) ? "text-slate-400"
+    : Number(v) > 0 ? "text-emerald-600"
+    : Number(v) < 0 ? "text-red-600"
+    : "text-slate-500";
+
+function Pnl({ pnl }) {
+  const { opt, fut, net, priced, unpriced, error } = pnl;
+  // Nothing to say at all: no hedge, no quotes, and no reason given. A row of
+  // three dashes is worse than the space it takes.
+  if (opt === null && fut === null && !error) return null;
+
+  const Fig = ({ label, value, strong }) => (
+    <div>
+      <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+      <p className={`tabular-nums ${strong ? "text-sm font-bold" : "text-xs font-semibold"} ${tone(value)}`}>
+        {signed(value)}
+      </p>
+    </div>
+  );
+
+  return (
+    <div className="mt-2 border-t border-slate-100 pt-1.5">
+      <div className="flex items-start justify-end gap-3.5">
+        <Fig label="options" value={opt} />
+        <Fig label="futures" value={fut} />
+        <Fig label="net" value={net} strong />
+      </div>
+      {/* Why a figure is missing, rather than leaving a dash to be guessed
+          at. A net is only shown once every leg has been priced: three of
+          four is not this position, and the leg that would not quote is as
+          likely as not the one that moved. */}
+      {(error || unpriced > 0) && (
+        <p className="mt-0.5 text-[10px] text-amber-700">
+          {error || `${priced} of ${priced + unpriced} option leg${priced + unpriced === 1 ? "" : "s"} quoted`}
+        </p>
+      )}
     </div>
   );
 }
