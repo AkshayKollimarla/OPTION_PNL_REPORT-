@@ -66,7 +66,32 @@ const columnsFor = (lotSize) => [
  * shares and prices per share, so what is actually being recorded should not
  * have to be taken on trust.
  */
-export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemove, onAdd, lotSize = 1 }) {
+/**
+ * Move this leg up or down the list.
+ *
+ * A chain click fills whichever card of that type is free, so a structure
+ * built out of order ends up with its calls and puts interleaved. It is read
+ * in pairs -- the call spread, then the put spread -- and these put it back
+ * in that order without rebuilding anything.
+ */
+function MoveButton({ dir, disabled, onClick }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      title={disabled
+        ? `Already ${dir === "up" ? "first" : "last"}`
+        : `Move this leg ${dir}`}
+      aria-label={`Move leg ${dir}`}
+      className="rounded px-1 py-0.5 text-[11px] leading-none text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:cursor-default disabled:opacity-25 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+    >
+      {dir === "up" ? "▲" : "▼"}
+    </button>
+  );
+}
+
+export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemove, onAdd, onMove, lotSize = 1 }) {
   const COLUMNS = columnsFor(lotSize);
   if (!legs.length) {
     return (
@@ -93,7 +118,7 @@ export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemov
           </tr>
         </thead>
         <tbody>
-          {legs.map((l) => (
+          {legs.map((l, i) => (
             <tr key={l.key} className="border-b border-slate-100 last:border-0">
               {/* Every strike listed for this expiry, up and down, rather
                   than a number to be known and typed. The box underneath is
@@ -154,11 +179,21 @@ export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemov
                 l.pnl == null ? "text-slate-500" : l.pnl < 0 ? "text-red-600" : "text-emerald-600"}`}>
                 {fmtMoney(l.pnl)}
               </td>
-              <td className="px-2 py-1.5 text-right">
-                <button type="button" title="Remove this leg" onClick={() => onRemove?.(l.key)}
-                  className="rounded px-1.5 py-0.5 text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600">
-                  ✕
-                </button>
+              <td className="px-2 py-1.5">
+                <div className="flex items-center justify-end gap-0.5">
+                  {onMove && (
+                    <>
+                      <MoveButton dir="up"   disabled={i === 0}
+                        onClick={() => onMove(l.key, -1)} />
+                      <MoveButton dir="down" disabled={i === legs.length - 1}
+                        onClick={() => onMove(l.key, 1)} />
+                    </>
+                  )}
+                  <button type="button" title="Remove this leg" onClick={() => onRemove?.(l.key)}
+                    className="ml-1 rounded px-1.5 py-0.5 text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600">
+                    ✕
+                  </button>
+                </div>
               </td>
             </tr>
           ))}

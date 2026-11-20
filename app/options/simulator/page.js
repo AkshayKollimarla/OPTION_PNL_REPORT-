@@ -11,6 +11,7 @@ import { legKey } from "../../../lib/leg-key";
 import OptionChainGrid from "../../../components/OptionChainGrid";
 import SelectedLegsStrip from "../../../components/SelectedLegsStrip";
 import { contractSize, toLots, toQuantity, US_EQUITY_CONTRACT } from "../../../lib/contract-size";
+import { swapAt, canMove, carriedOver, clearedForCoin } from "../../../lib/leg-order";
 
 const RISK_FREE = 0.05;
 
@@ -36,6 +37,7 @@ const EMPTY = {
 };
 
 const LEG_OPTIONS = ["CALL LONG", "CALL SHORT", "PUT LONG", "PUT SHORT"];
+
 
 // BTC/ETH have both an inverse perpetual (BTC-PERPETUAL) and a USDC-margined
 // linear perpetual (BTC_USDC-PERPETUAL). Tokens that are already USDC-linear
@@ -464,6 +466,95 @@ function SimulatorInner() {
   useEffect(() => { return () => clearInterval(comboAcTimerRef.current); }, []);
 
   /* ── Leg helpers ──────────────────────────────────── */
+
+  /**
+   * Move a leg up or down the list.
+   *
+   * Clicking a chain fills whichever card of that type is free, so a
+   * structure built out of order ends up with its calls and puts
+   * interleaved. Nothing is wrong with it, but it is read in pairs -- the
+   * call spread, then the put spread -- and reading it shuffled is work.
+   *
+   * editIds moves WITH the leg. The two are paired by position: editIds[i] is
+   * the saved row behind legs[i], and the update loop writes legs[i]'s values
+   * to that id. Reordering one without the other does not scramble the
+   * display, it writes one leg's strike and premium into another leg's row.
+   */
+  function moveLeg(idx, dir) {
+    if (!canMove(legs.length, idx, dir)) return;
+    const to = idx + dir;
+
+    const swap = (arr) => swapAt(arr, idx, to);
+    setLegs(swap);
+    setEditIds(swap);
+  }
+
+  /**
+   * Switching the structure to another coin.
+   *
+   * Everything on a leg belongs to the coin it was chosen under: the strike,
+   * the premium, the expiry, the volatility, the price the hedge went on at.
+   * None of it means anything against a different underlying -- an ETH
+   * premium of 79.14 sitting on an AMD leg, a strike of 1820 on a coin
+   * trading at 60 -- yet it all looks filled in, which is worse than blank.
+   *
+   * So the coin picker starts the legs again rather than editing them in
+   * place. Outside edit mode that is the default four, blank: a six-leg
+   * structure left over from the previous coin would otherwise still be
+   * standing when the first strike of the new one is clicked, and the click
+   * would land on one of its leftover cards.
+   *
+   * A SAVED strategy keeps its leg count and its rows. Those are paired by
+   * position -- see moveLeg -- so dropping to four cards would leave the
+   * fifth and sixth rows behind in the group with nothing on screen
+   * representing them. Its legs are emptied where they stand instead, and
+   * what the structure has actually booked is left alone.
+   */
+  function changeCoin(next) {
+    const coin = String(next || "");
+    const current = legs[masterLegIdx]?.form.token || "";
+    if (!coin || coin === current) return;
+
+    // Only ask when there is something to lose. Picking the coin on a blank
+    // page is the ordinary case and should not cost a decision.
+    const built = legs.some((l) =>
+      strikeNumber(l.form.options_strike) > 0 ||
+      String(l.form.opt_entry_price ?? "").trim() !== "");
+    if ((built || isEditMode) && !window.confirm(
+      `Switch to ${coin}? The legs below are cleared — their strikes, premiums and expiry belong to ${current || "the coin now showing"}.`
+    )) return;
+
+    // A distance the user had taken over was taken over for the old coin.
+    // These are absolute prices, not ratios, so the verdict cannot carry.
+    distanceManualRef.current = { upside_distance: false, down_distance: false };
+    distanceSeenRef.current   = { upside_distance: false, down_distance: false };
+
+    setLegs((prev) => {
+      const keep = carriedOver(prev[masterLegIdx]?.form);
+
+      if (isEditMode) {
+        // overrides recorded which fields had been taken off the first
+        // card's lead. Every one of them has just been cleared.
+        return prev.map((l) => ({
+          ...l,
+          overrides: {},
+          form: { ...clearedForCoin(l.form, coin, EMPTY), ...keep },
+        }));
+      }
+
+      return DEFAULT_LEG_TYPES.map((t) => {
+        const leg = makeLeg(t);
+        leg.form = { ...leg.form, ...keep, token: coin };
+        return leg;
+      });
+    });
+
+    if (!isEditMode) setEditIds([]);
+    // Let the new coin's chain choose its own front expiry rather than
+    // hunting for one the old coin happened to share.
+    setChainExpiry("");
+  }
+
   // A new leg starts out following the first card's distances, same as any
   // other non-overridden leg — otherwise it would be the one card sitting at
   // blank while the rest share a value.
@@ -2161,7 +2252,7 @@ function SimulatorInner() {
             onExpiryChange={setChainExpiry}
             tokenControl={
               <TokenSelect accountId={selectedAcct} value={chainToken}
-                onChange={(v) => setLegField(masterLegIdx, "token", v)} />
+                onChange={changeCoin} />
             }
             picked={picked}
             onPick={pickFromChain}
@@ -2174,6 +2265,7 @@ function SimulatorInner() {
             onChange={stripChange}
             onSide={(idx, side) => changeLegType(idx, `${(legs[idx]?.type || "CALL LONG").split(" ")[0]} ${side}`)}
             onRemove={(idx) => removeLeg(idx)}
+            onMove={moveLeg}
           />
 
           {/* What belongs to the structure rather than to any one leg. One row
