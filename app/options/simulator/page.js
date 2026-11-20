@@ -386,6 +386,11 @@ function SimulatorInner() {
   // The last coin the structure had, so an emptied structure still has a
   // chain to rebuild itself from. See chainToken below.
   const lastCoinRef = useRef("");
+  // The futures mark last fetched, and the coin it was fetched for. Kept so a
+  // leg created AFTER the coin was picked -- the first click back into an
+  // emptied structure -- starts with the hedge price too, rather than only
+  // the legs that happened to exist at the moment the answer came back.
+  const futMarkRef = useRef({ coin: "", price: null });
 
   const deriveds = useMemo(() => legs.map((l) => computeDerived(l.form)), [legs]);
 
@@ -493,6 +498,50 @@ function SimulatorInner() {
   }
 
   /**
+   * The hedge price for a coin, written into the legs.
+   *
+   * Picking a coin clears the futures entry price with everything else that
+   * belonged to the old one, and the right value is a lookup away -- so it is
+   * looked up rather than left as a blank box to be filled in by hand from
+   * another screen.
+   *
+   * Only ever from a deliberate coin change. It is never run on load and
+   * never in edit mode: a saved structure's futures entry price is what the
+   * hedge ACTUALLY went on at, and quietly replacing it with today's mark
+   * would rewrite the position's cost basis and every figure drawn from it.
+   *
+   * The coin is checked again before the write. Two quick changes would
+   * otherwise land the first coin's mark on the second coin's legs, which is
+   * the sort of wrong number that looks entirely plausible.
+   */
+  async function fillFuturesPrice(coin) {
+    if (!selectedAcct || !coin) return;
+    try {
+      const j = await fetch(
+        `/api/market?account_id=${selectedAcct}&token=${encodeURIComponent(coin)}&action=futures`
+      ).then((r) => r.json());
+      const px = Number(j?.mark_price);
+      if (!Number.isFinite(px) || px <= 0) return;
+
+      futMarkRef.current = { coin, price: px };
+      setLegs((prev) => (prev.length && prev[0].form.token === coin
+        ? prev.map((l) => ({ ...l, form: { ...l.form, fut_entry_price: String(px) } }))
+        : prev));
+    } catch {
+      // No mark, no write. The box stays empty and typable, which is what it
+      // was before this ran.
+    }
+  }
+
+  /** The hedge price for a leg being created, when one has been fetched. */
+  function seedFutPrice(form) {
+    const { coin, price } = futMarkRef.current;
+    if (!price || !coin || form.token !== coin) return form;
+    if (String(form.fut_entry_price ?? "").trim() !== "") return form;
+    return { ...form, fut_entry_price: String(price) };
+  }
+
+  /**
    * Switching the structure to another coin.
    *
    * Everything on a leg belongs to the coin it was chosen under: the strike,
@@ -555,6 +604,11 @@ function SimulatorInner() {
     // Let the new coin's chain choose its own front expiry rather than
     // hunting for one the old coin happened to share.
     setChainExpiry("");
+
+    // A saved structure's recorded hedge price is what it actually went on
+    // at, so it is never replaced with today's mark.
+    futMarkRef.current = { coin: "", price: null };
+    if (!isEditMode) fillFuturesPrice(coin);
   }
 
   // A new leg starts out following the first card's distances, same as any
@@ -568,6 +622,7 @@ function SimulatorInner() {
       // With no cards left there is no first card to copy the coin from, and
       // a leg with no coin cannot be priced. The chain still knows it.
       if (!leg.form.token) leg.form.token = chainTokenRef.current || "";
+      leg.form = seedFutPrice(leg.form);
       // A call belongs above the puts, even when it is being added last.
       return insertByType(prev, leg);
     });
@@ -896,9 +951,11 @@ function SimulatorInner() {
       const leg = makeLeg(type);
       const master = prev[masterLegIdx];
       if (master) for (const k of SYNCED_KEYS) leg.form[k] = syncedValueFor(k, master.form[k] ?? "", type);
+      const made = fill(leg);
+      made.form = seedFutPrice(made.form);
       // Calls above puts, whichever order they were clicked in. Appending
       // meant a put picked first stayed above every call for good.
-      return insertByType(prev, fill(leg));
+      return insertByType(prev, made);
     });
   }
 
