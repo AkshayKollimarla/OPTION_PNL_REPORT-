@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 /**
  * The legs of the structure, one line each — and the editor for them.
  *
@@ -53,7 +55,8 @@ function StrikePicker({ value, choices, onPick }) {
   );
 }
 
-const columnsFor = (lotSize) => [
+const columnsFor = (lotSize, draggable) => [
+  ...(draggable ? [""] : []),
   "Strike", "Type", "Expiration", "S/L",
   lotSize > 1 ? "Size (lots)" : "Size",
   "Price", "Exit", "IV", "MM Loss", "P&L", "",
@@ -67,32 +70,40 @@ const columnsFor = (lotSize) => [
  * have to be taken on trust.
  */
 /**
- * Move this leg up or down the list.
+ * The grip a row is dragged by.
  *
- * A chain click fills whichever card of that type is free, so a structure
- * built out of order ends up with its calls and puts interleaved. It is read
- * in pairs -- the call spread, then the put spread -- and these put it back
- * in that order without rebuilding anything.
+ * Only the handle is draggable, not the row. A row that is itself draggable
+ * swallows the drag that selects text in its own number boxes, so correcting
+ * a strike turns into flinging the leg somewhere.
  */
-function MoveButton({ dir, disabled, onClick }) {
+function DragHandle(props) {
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      title={disabled
-        ? `Already ${dir === "up" ? "first" : "last"}`
-        : `Move this leg ${dir}`}
-      aria-label={`Move leg ${dir}`}
-      className="rounded px-1 py-0.5 text-[11px] leading-none text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:cursor-default disabled:opacity-25 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+    <span
+      {...props}
+      role="button"
+      tabIndex={-1}
+      aria-label="Drag to reorder this leg"
+      title="Drag to reorder"
+      className="cursor-grab select-none px-1 text-slate-300 transition-colors hover:text-slate-600 active:cursor-grabbing"
     >
-      {dir === "up" ? "▲" : "▼"}
-    </button>
+      {/* Six dots: the usual sign for a thing that can be picked up. */}
+      ⠿
+    </span>
   );
 }
 
 export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemove, onAdd, onMove, lotSize = 1 }) {
-  const COLUMNS = columnsFor(lotSize);
+  const COLUMNS = columnsFor(lotSize, !!onMove);
+  // Which row is in the air, and which row it is currently over. Both are
+  // positions in the list as drawn, which is the list as stored.
+  const [dragFrom, setDragFrom] = useState(null);
+  const [dragOver, setDragOver] = useState(null);
+
+  const endDrag = () => { setDragFrom(null); setDragOver(null); };
+  const drop = (to) => {
+    if (dragFrom !== null && to !== dragFrom) onMove?.(dragFrom, to);
+    endDrag();
+  };
   if (!legs.length) {
     return (
       <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center">
@@ -119,7 +130,30 @@ export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemov
         </thead>
         <tbody>
           {legs.map((l, i) => (
-            <tr key={l.key} className="border-b border-slate-100 last:border-0">
+            <tr
+              key={l.key}
+              // The row accepts the drop; only the grip starts the drag.
+              onDragOver={onMove ? (e) => { e.preventDefault(); setDragOver(i); } : undefined}
+              onDrop={onMove ? (e) => { e.preventDefault(); drop(i); } : undefined}
+              className={`border-b border-slate-100 last:border-0 transition-colors ${
+                dragFrom === i ? "opacity-40"
+                  : dragOver === i && dragFrom !== null ? "bg-blue-50"
+                  : ""}`}
+            >
+              {onMove && (
+                <td className="w-6 px-1 py-1.5">
+                  <DragHandle
+                    draggable
+                    onDragStart={(e) => {
+                      setDragFrom(i);
+                      e.dataTransfer.effectAllowed = "move";
+                      // Firefox starts no drag at all without payload.
+                      e.dataTransfer.setData("text/plain", String(i));
+                    }}
+                    onDragEnd={endDrag}
+                  />
+                </td>
+              )}
               {/* Every strike listed for this expiry, up and down, rather
                   than a number to be known and typed. The box underneath is
                   kept for a leg the chain cannot offer strikes for -- another
@@ -179,21 +213,11 @@ export default function SelectedLegsStrip({ legs = [], onChange, onSide, onRemov
                 l.pnl == null ? "text-slate-500" : l.pnl < 0 ? "text-red-600" : "text-emerald-600"}`}>
                 {fmtMoney(l.pnl)}
               </td>
-              <td className="px-2 py-1.5">
-                <div className="flex items-center justify-end gap-0.5">
-                  {onMove && (
-                    <>
-                      <MoveButton dir="up"   disabled={i === 0}
-                        onClick={() => onMove(l.key, -1)} />
-                      <MoveButton dir="down" disabled={i === legs.length - 1}
-                        onClick={() => onMove(l.key, 1)} />
-                    </>
-                  )}
-                  <button type="button" title="Remove this leg" onClick={() => onRemove?.(l.key)}
-                    className="ml-1 rounded px-1.5 py-0.5 text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600">
-                    ✕
-                  </button>
-                </div>
+              <td className="px-2 py-1.5 text-right">
+                <button type="button" title="Remove this leg" onClick={() => onRemove?.(l.key)}
+                  className="rounded px-1.5 py-0.5 text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600">
+                  ✕
+                </button>
               </td>
             </tr>
           ))}

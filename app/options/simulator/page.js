@@ -11,7 +11,7 @@ import { legKey } from "../../../lib/leg-key";
 import OptionChainGrid from "../../../components/OptionChainGrid";
 import SelectedLegsStrip from "../../../components/SelectedLegsStrip";
 import { contractSize, toLots, toQuantity, US_EQUITY_CONTRACT } from "../../../lib/contract-size";
-import { swapAt, canMove, carriedOver, clearedForCoin } from "../../../lib/leg-order";
+import { moveWithin, insertByType, carriedOver, clearedForCoin } from "../../../lib/leg-order";
 
 const RISK_FREE = 0.05;
 
@@ -234,7 +234,14 @@ function orderSavedLegs(members) {
     legs[0].form[key] = donor.form[key];
     donor.form[key] = "";
   }
-  return { legs, ids: ordered.map((t) => t.id) };
+  // The saved row's id travels ON the leg, not in a list beside it. A list
+  // beside it is paired by position, and this screen now has three ways to
+  // change a leg's position -- moving one, dropping one, and inserting a new
+  // one above the puts. Each is a chance for the two to come apart, and when
+  // they do the update loop writes one leg's strike and premium into another
+  // leg's row rather than merely drawing them in the wrong order.
+  for (let i = 0; i < legs.length; i++) legs[i].savedId = ordered[i].id;
+  return { legs };
 }
 
 /**
@@ -256,6 +263,8 @@ function todayLocal() {
 // still shows the day it was actually entered.
 const makeLeg = (type = "CALL LONG") => ({
   type,
+  // No saved row behind it until one is written. See orderSavedLegs.
+  savedId: null,
   form: { ...EMPTY, entry_date: todayLocal(), option_type: type.startsWith("CALL") ? "CALL" : "PUT", iv: "" },
 });
 
@@ -274,7 +283,6 @@ function SimulatorInner() {
   // removed, and Add Leg still appends a fifth.
   const DEFAULT_LEG_TYPES = ["CALL LONG", "CALL SHORT", "PUT LONG", "PUT SHORT"];
   const [legs,          setLegs]          = useState(() => DEFAULT_LEG_TYPES.map(makeLeg));
-  const [editIds,       setEditIds]       = useState([]);
   // Saved legs the user has removed from the screen. Their rows still exist,
   // and Update is what actually deletes them -- removing a card is not on its
   // own a database change, so backing out of the page changes nothing.
@@ -375,6 +383,9 @@ function SimulatorInner() {
   const liveMidsRef = useRef(null);
   const quoteRef = useRef(() => null);
   const chainTokenRef = useRef("");
+  // The last coin the structure had, so an emptied structure still has a
+  // chain to rebuild itself from. See chainToken below.
+  const lastCoinRef = useRef("");
 
   const deriveds = useMemo(() => legs.map((l) => computeDerived(l.form)), [legs]);
 
@@ -418,9 +429,8 @@ function SimulatorInner() {
         if (j.error) throw new Error(j.error);
         const members = j.trades || [];
         if (!members.length) throw new Error("No legs found for this group.");
-        const { legs: orderedLegs, ids } = orderSavedLegs(members);
+        const { legs: orderedLegs } = orderSavedLegs(members);
         setLegs(orderedLegs);
-        setEditIds(ids);
         setRemovedIds([]);
         // Judge this group's saved distances afresh -- opening a second
         // strategy without leaving the page must not inherit the first one's
@@ -468,25 +478,18 @@ function SimulatorInner() {
   /* ── Leg helpers ──────────────────────────────────── */
 
   /**
-   * Move a leg up or down the list.
+   * Drop a leg at any position, not just the next one.
    *
    * Clicking a chain fills whichever card of that type is free, so a
    * structure built out of order ends up with its calls and puts
-   * interleaved. Nothing is wrong with it, but it is read in pairs -- the
-   * call spread, then the put spread -- and reading it shuffled is work.
+   * interleaved. It is read in pairs -- the call spread, then the put
+   * spread -- and reading it shuffled is work.
    *
-   * editIds moves WITH the leg. The two are paired by position: editIds[i] is
-   * the saved row behind legs[i], and the update loop writes legs[i]'s values
-   * to that id. Reordering one without the other does not scramble the
-   * display, it writes one leg's strike and premium into another leg's row.
+   * The saved row id rides on the leg itself, so it follows wherever the leg
+   * lands and there is no second list to keep in step. See orderSavedLegs.
    */
-  function moveLeg(idx, dir) {
-    if (!canMove(legs.length, idx, dir)) return;
-    const to = idx + dir;
-
-    const swap = (arr) => swapAt(arr, idx, to);
-    setLegs(swap);
-    setEditIds(swap);
+  function moveLeg(from, to) {
+    setLegs((prev) => moveWithin(prev, from, to));
   }
 
   /**
@@ -549,7 +552,6 @@ function SimulatorInner() {
       });
     });
 
-    if (!isEditMode) setEditIds([]);
     // Let the new coin's chain choose its own front expiry rather than
     // hunting for one the old coin happened to share.
     setChainExpiry("");
@@ -563,22 +565,35 @@ function SimulatorInner() {
       const leg    = makeLeg("CALL LONG");
       const master = prev[masterLegIdx];
       if (master) for (const k of SYNCED_KEYS) leg.form[k] = syncedValueFor(k, master.form[k] ?? "", leg.type);
-      return [...prev, leg];
+      // With no cards left there is no first card to copy the coin from, and
+      // a leg with no coin cannot be priced. The chain still knows it.
+      if (!leg.form.token) leg.form.token = chainTokenRef.current || "";
+      // A call belongs above the puts, even when it is being added last.
+      return insertByType(prev, leg);
     });
   }
 
+  /**
+   * Drop a leg from the structure.
+   *
+   * Any of them, down to none. This used to stop at two, on the reasoning
+   * that a single leg is a single strategy and belongs on the Add Strategy
+   * page -- but the rule bit hardest where it was least wanted: clearing a
+   * structure out to rebuild it left two legs standing that could not be
+   * removed, and the next chain click landed on one of them.
+   *
+   * The empty state is a real one: the strip says to click a price in the
+   * chain, and the chain is still there to click, because the coin is held
+   * beside the legs rather than read off the first of them.
+   */
   function removeLeg(idx) {
-    // Two legs is the floor: one leg on its own is a single strategy, which
-    // the Add Strategy page already covers.
-    if (legs.length <= 2) return;
     // A card backed by a saved row has to be deleted, not just dropped from
     // the screen. Update used to write only the legs still showing, so the
     // removed row stayed in the group and the leg reappeared the next time the
     // strategy was opened -- and went on counting towards its booked PnL.
-    const savedId = editIds[idx];
+    const savedId = legs[idx]?.savedId;
     if (savedId) setRemovedIds((prev) => (prev.includes(savedId) ? prev : [...prev, savedId]));
-    setLegs((prev)    => prev.filter((_, i) => i !== idx));
-    setEditIds((prev) => prev.filter((_, i) => i !== idx));
+    setLegs((prev) => prev.filter((_, i) => i !== idx));
   }
 
   function changeLegType(idx, type) {
@@ -614,7 +629,10 @@ function SimulatorInner() {
   // otherwise build an instrument name Deribit rejects. The first card already
   // clears its own strike on these edits; followers must do the same.
   const STRIKE_INVALIDATING = ["expiry", "token"];
-  const masterLegIdx = legDisplayOrder[0];
+  // Defaulted rather than left undefined: every leg can now be deleted, and
+  // `undefined === undefined` is true, which would make setLegField treat
+  // every leg as the first card on an empty structure.
+  const masterLegIdx = legDisplayOrder[0] ?? 0;
 
   // Distances follow the short strikes -- see lib/leg-distance.js for the rule
   // and why. These two carry the verdicts across renders: which field a person
@@ -741,7 +759,14 @@ function SimulatorInner() {
      One chain for the whole structure, because every leg of one shares a
      token -- which is also why the token comes off the first card rather than
      being a control of its own. */
-  const chainToken = legs[masterLegIdx]?.form.token || legs[0]?.form.token || "";
+  // The coin normally comes off the first card. It is remembered beside them
+  // as well, because every leg can now be deleted: read off the cards alone,
+  // emptying the structure would empty the coin, the chain would have nothing
+  // to load, and there would be no price left to click to build it back --
+  // the one moment the chain is needed most.
+  const legToken = legs[masterLegIdx]?.form.token || legs[0]?.form.token || "";
+  if (legToken) lastCoinRef.current = legToken;
+  const chainToken = legToken || lastCoinRef.current;
   const [chainExpiry, setChainExpiry] = useState("");
   const [chainExpiries, setChainExpiries] = useState([]);
 
@@ -871,7 +896,9 @@ function SimulatorInner() {
       const leg = makeLeg(type);
       const master = prev[masterLegIdx];
       if (master) for (const k of SYNCED_KEYS) leg.form[k] = syncedValueFor(k, master.form[k] ?? "", type);
-      return [...prev, fill(leg)];
+      // Calls above puts, whichever order they were clicked in. Appending
+      // meant a put picked first stayed above every call for good.
+      return insertByType(prev, fill(leg));
     });
   }
 
@@ -1975,7 +2002,7 @@ function SimulatorInner() {
       // with what is on screen.
       for (let i = 0; i < legs.length; i++) {
         const leg = legs[i];
-        const id = editIds[i];
+        const id = leg.savedId;
         const acctPatch = selectedAcct ? { account_id: selectedAcct } : {};
         const payload = { ...leg.form, group_id: editGroup, leg_index: i, ...acctPatch };
         const j = id
