@@ -2,7 +2,24 @@
 
 import { useState, useEffect } from "react";
 
-const EXCHANGES = ["deribit", "hyperliquid", "alpaca", "binance", "bybit", "okx", "other"];
+// Only the venues this app can actually reach.
+//
+// It also offered bybit and okx, and there is no code behind either -- the
+// list was aspirational and the app had no client for them. Binance is here
+// because it now has one: the whole European option board is public, so the
+// chain, the greeks and the perpetual's mark arrive without a credential.
+//
+// What the label means differs by venue, and the difference matters. For
+// Alpaca and Hyperliquid the CREDENTIAL decides where a request goes -- the
+// US-markets account is labelled hyperliquid and holds Alpaca keys, so the
+// label cannot be trusted to route. A Binance key has no distinctive shape
+// to go on, so there the label does the routing; it is safe because nothing
+// on that path sends a credential anywhere.
+//
+// "other" stays, because an account can legitimately be one: a historical
+// label, or a venue reached by hand. It is a note to the reader, not a
+// promise that the app will connect to something.
+const EXCHANGES = ["deribit", "hyperliquid", "alpaca", "binance", "other"];
 
 /**
  * What each venue actually needs, so the form asks for that and nothing else.

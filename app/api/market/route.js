@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import * as binance from "../../../lib/binance";
 import pool from "../../../lib/options-db";
 import { hip3Price, HIP3_DEX } from "../../../lib/price-feed";
 import {
@@ -87,6 +88,32 @@ export function buildInstrumentName(currency, expiryDate, strike, optType) {
 // GET /api/market?account_id=X&token=ETH&action=ticker&instrument=ETH-25OCT24-1700-P
 //   → { mark_price_usd, mark_price_raw, underlying_price, mark_iv, best_bid_usd, best_ask_usd }
 
+/**
+ * Binance European options.
+ *
+ * Every action it supports, in one branch, because none of them needs a
+ * credential: the chain, the board and the perpetual's mark are all public.
+ * An account labelled binance is what points the page here; it is not what
+ * makes the data arrive.
+ */
+async function binanceAction({ action, token, instrument, q }) {
+  if (action === "chain")   return NextResponse.json(await binance.chain(token));
+  if (action === "futures") return NextResponse.json(await binance.futures(token));
+  if (action === "ticker" && instrument) {
+    return NextResponse.json(await binance.ticker(instrument));
+  }
+  if (action === "symbols") {
+    const coins = await binance.symbols();
+    return NextResponse.json({
+      symbols: coins
+        .filter((c) => !q || c.includes(q))
+        .map((c) => ({ symbol: c, name: "", recent: false })),
+    });
+  }
+  return NextResponse.json(
+    { error: `Binance options do not support '${action}'.` }, { status: 400 });
+}
+
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const accountId  = searchParams.get("account_id");
@@ -120,6 +147,13 @@ export async function GET(request) {
   }
 
   try {
+    if (exchange === "binance") {
+      return await binanceAction({
+        action, token, instrument,
+        q: (searchParams.get("q") || "").trim().toUpperCase(),
+      });
+    }
+
     if (exchange === "alpaca") {
       if (!apiKey || !apiSecret) {
         return NextResponse.json(
@@ -438,7 +472,14 @@ export async function GET(request) {
       });
     }
 
-    return NextResponse.json({ error: `action '${action}' not supported for exchange '${exchange}'` }, { status: 400 });
+    // A venue with no client here. Said in words rather than in the shape of
+    // an internal dispatch failure: "action 'chain' not supported for
+    // exchange 'binance'" is a true sentence that tells the reader nothing
+    // they can act on, and what they can act on is picking another account.
+    return NextResponse.json({
+      error: `This dashboard cannot fetch market data from '${exchange}'.`
+           + ` Pick an account on Deribit, Alpaca, Hyperliquid or Binance.`,
+    }, { status: 400 });
   } catch (err) {
     console.error("[market route]", err);
     return NextResponse.json({ error: err.message }, { status: 500 });

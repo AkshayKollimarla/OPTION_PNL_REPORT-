@@ -12,6 +12,35 @@ const HL_INFO = "https://api.hyperliquid.xyz/info";
 
 const WALLET = /^0x[0-9a-fA-F]{40}$/;
 
+// The venues this app has a client for. Anything else it simply cannot talk
+// to, whatever a dropdown once offered.
+const REACHABLE = new Set(["deribit", "hyperliquid", "alpaca", "binance"]);
+
+/**
+ * A venue this app cannot reach, named by the account's own label.
+ *
+ * The label is a VETO here and never a router. Routing stays on the shape of
+ * the credential, because the label cannot be trusted to route -- the
+ * HYPER-USMARKETS account is labelled "hyperliquid" and holds Alpaca keys,
+ * and honouring the label would send it to the wrong venue.
+ *
+ * But the shape cannot be trusted to REFUSE, either. A Deribit client_id is
+ * a short alphanumeric string with nothing to distinguish it, so every
+ * unrecognised credential falls through to Deribit -- which is right for a
+ * Deribit key and, for a Binance one, means posting someone's key and secret
+ * to deribit.com as client_id and client_secret. That happened.
+ *
+ * So the two are used for what each is good for: the shape decides where a
+ * reachable account goes, and the label decides whether to go at all. An
+ * empty label, or "other", is not a claim about a venue and is left to the
+ * shape as before.
+ */
+function unsupportedVenue(exchange) {
+  const name = String(exchange || "").trim().toLowerCase();
+  if (!name || name === "other" || REACHABLE.has(name)) return null;
+  return name;
+}
+
 /**
  * Test the credentials against the venue they actually belong to.
  *
@@ -40,7 +69,31 @@ export async function POST(request, { params }) {
   const acct = rows[0];
   const key = String(acct.api_key || "").trim();
 
+  const unreachable = unsupportedVenue(acct.exchange);
+  if (unreachable) {
+    return NextResponse.json({
+      ok: false,
+      error: `This dashboard has no ${unreachable} client, so there is nothing to test against.`,
+      hint: `It can reach ${[...REACHABLE].join(", ")} only. Nothing was sent anywhere — `
+          + `the key and secret on this account have not left the server.`,
+    });
+  }
+
   try {
+    // Binance market data is public, so there is no credential to test. Said
+    // plainly rather than reported as a pass -- a green tick this account has
+    // not earned would be read as "the keys work", and nothing here has ever
+    // asked Binance whether they do.
+    if (String(acct.exchange || "").toLowerCase() === "binance") {
+      return NextResponse.json({
+        ok: true,
+        message: "Binance option data needs no key, and this account's data is already available.",
+        endpoint: "https://eapi.binance.com/eapi/v1 (public)",
+        hint: "The key and secret saved here have not been tested and are not used."
+            + " Chains, greeks and prices work without them; balances, positions"
+            + " and order placement are not supported for Binance yet.",
+      });
+    }
     if (isAlpacaKey(key)) return NextResponse.json(await testAlpaca(acct, key));
     if (WALLET.test(key)) return NextResponse.json(await testHyperliquid(acct, key));
     return NextResponse.json(await testDeribit(acct, key));
