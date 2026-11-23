@@ -3,20 +3,25 @@
 // Who can sign in to this dashboard.
 //
 //   node scripts/users.js list
-//   node scripts/users.js add <username> [--admin] [--db <name>]
+//   node scripts/users.js add <username> [--admin]
 //   node scripts/users.js passwd <username>
 //   node scripts/users.js remove <username> [--drop-db]
 //   node scripts/users.js adopt-admin        (register the .env login as admin)
+//   node scripts/users.js check              (what exists, and what is missing)
 //
 // The password is read from the terminal, never from an argument: an argument
 // goes into shell history, into `ps` while it runs, and into any shell
 // logging the box happens to have on.
 //
-// Adding a user also BUILDS their database: the same tables as the admin's,
-// structure for structure, with no rows in them. Copied from the live schema
-// rather than from schema.sql, because the live one is what the app has
-// actually migrated itself to -- several routes add their own columns on
-// first use, and a file on disk drifts behind that silently.
+// Adding a user BUILDS BOTH of their databases -- the options book and the
+// bot entries. Both, because this app keeps data in two of them, and giving
+// a new user only the first is what let them read every bot entry on the box
+// while their options book sat correctly empty.
+//
+// The tables are copied from the live schema rather than from schema.sql:
+// several routes add their own columns on first use, so the file on disk
+// drifts behind what the app has actually migrated itself to. Structure
+// only -- not one row comes across.
 
 const fs = require("fs");
 const path = require("path");
@@ -28,19 +33,23 @@ loadEnv();
 const ARGS = process.argv.slice(2);
 const CMD = ARGS[0];
 const flag = (name) => ARGS.includes(`--${name}`);
-const opt = (name) => {
-  const i = ARGS.indexOf(`--${name}`);
-  return i >= 0 ? ARGS[i + 1] : null;
-};
 
-const BASE_DB = process.env.OPTIONS_MYSQL_DATABASE || "options_pnl_report";
 const AUTH_DB = process.env.AUTH_MYSQL_DATABASE || "trading_dashboard_auth";
 
-const conn = (database) => mysql.createConnection({
-  host:     process.env.OPTIONS_MYSQL_HOST || "localhost",
-  port:     Number(process.env.OPTIONS_MYSQL_PORT) || 3306,
-  user:     process.env.OPTIONS_MYSQL_USER || "root",
-  password: process.env.OPTIONS_MYSQL_PASSWORD || "",
+// The two databases this app keeps data in, each on its own connection
+// profile with its own environment variables.
+const REALMS = [
+  { key: "options", label: "options book", env: "OPTIONS_MYSQL", fallback: "options_pnl_report" },
+  { key: "bot",     label: "bot entries",  env: "MYSQL",         fallback: "trading_dashboard"  },
+];
+const baseOf = (r) => process.env[`${r.env}_DATABASE`] || r.fallback;
+const dbFor = (r, slug) => (slug ? `${baseOf(r)}_${slug}` : baseOf(r));
+
+const conn = (realm, database) => mysql.createConnection({
+  host:     process.env[`${realm.env}_HOST`] || "localhost",
+  port:     Number(process.env[`${realm.env}_PORT`]) || 3306,
+  user:     process.env[`${realm.env}_USER`] || "root",
+  password: process.env[`${realm.env}_PASSWORD`] || "",
   ...(database ? { database } : {}),
   multipleStatements: false,
 });
@@ -54,9 +63,10 @@ async function main() {
     case "passwd":      return passwd();
     case "remove":      return remove();
     case "adopt-admin": return adoptAdmin();
+    case "check":       return check();
     default:
       console.log(fs.readFileSync(__filename, "utf8")
-        .split("\n").slice(2, 17).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
+        .split("\n").slice(2, 10).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
       process.exit(CMD ? 1 : 0);
   }
 }
@@ -73,11 +83,12 @@ async function list() {
     return done();
   }
   console.log("");
-  console.log("USERNAME".padEnd(20) + "DATABASE".padEnd(34) + "ROLE".padEnd(8) + "LAST LOGIN");
+  console.log("USERNAME".padEnd(18) + "ROLE".padEnd(8) + "DATABASES".padEnd(46) + "LAST LOGIN");
   for (const r of rows) {
-    console.log(String(r.username).padEnd(20)
-      + String(r.db_name).padEnd(34)
+    const slug = r.is_admin ? "" : r.slug;
+    console.log(String(r.username).padEnd(18)
       + (r.is_admin ? "admin" : "user").padEnd(8)
+      + REALMS.map((x) => dbFor(x, slug)).join("  ").padEnd(46)
       + (r.last_login || "never"));
   }
   console.log("");
@@ -85,24 +96,25 @@ async function list() {
 }
 
 async function add() {
-  const { upsertUser, findUser, databaseFor } = await lib();
+  const { upsertUser, findUser, slugOf } = await lib();
   const username = ARGS[1];
-  if (!username) throw new Error("Usage: node scripts/users.js add <username> [--admin] [--db <name>]");
+  if (!username) throw new Error("Usage: node scripts/users.js add <username> [--admin]");
   if (await findUser(username)) {
     throw new Error(`${username} already exists. Use \`passwd\` to change their password.`);
   }
 
   const admin = flag("admin");
-  const db = opt("db") || databaseFor(username, admin);
+  const slug = slugOf(username, admin);
   const password = await askPassword(`Password for ${username}`);
 
-  // The database first: a user who can sign in to a database that does not
+  // The databases first: a user who can sign in to databases that do not
   // exist gets an error on every page, which is worse than not existing.
-  await provision(db);
-  await upsertUser({ username, password, db, admin });
+  for (const realm of REALMS) await provision(realm, slug);
+  await upsertUser({ username, password, admin });
 
-  console.log(`\n  ${username} added${admin ? " as admin" : ""}, working in ${db}.\n`);
-  if (!admin) console.log("  They start with no accounts and no trades — their own empty book.\n");
+  console.log(`\n  ${username} added${admin ? " as admin" : ""}.`);
+  for (const realm of REALMS) console.log(`    ${realm.label.padEnd(14)} ${dbFor(realm, slug)}`);
+  if (!admin) console.log("\n  They start with nothing in either — their own empty dashboard.\n");
   return done();
 }
 
@@ -113,7 +125,7 @@ async function passwd() {
   const existing = await findUser(username);
   if (!existing) throw new Error(`No user called ${username}.`);
   const password = await askPassword(`New password for ${username}`);
-  await upsertUser({ username, password, db: existing.db, admin: existing.admin });
+  await upsertUser({ username, password, admin: existing.admin });
   console.log(`\n  Password changed for ${username}.\n`);
   return done();
 }
@@ -124,20 +136,28 @@ async function remove() {
   if (!username) throw new Error("Usage: node scripts/users.js remove <username> [--drop-db]");
   const existing = await findUser(username);
   if (!existing) throw new Error(`No user called ${username}.`);
-  if (existing.db === BASE_DB && flag("drop-db")) {
-    throw new Error(`${username} works in the main database. Refusing to drop ${BASE_DB}.`);
-  }
 
-  const ok = await ask(`Remove ${username}${flag("drop-db") ? ` AND DROP ${existing.db} with everything in it` : ""}? [y/N] `);
-  if (!/^y/i.test(ok)) { console.log("\n  Left alone.\n"); return done(); }
+  const dropping = flag("drop-db");
+  if (dropping && !existing.slug) {
+    throw new Error(`${username} is the admin and works in the main databases. Refusing to drop them.`);
+  }
+  const theirs = REALMS.map((r) => dbFor(r, existing.slug));
+
+  const answer = await ask(
+    `Remove ${username}${dropping ? ` AND DROP ${theirs.join(" and ")} with everything in them` : ""}? [y/N] `);
+  if (!/^y/i.test(answer)) { console.log("\n  Left alone.\n"); return done(); }
 
   await deleteUser(username);
-  if (flag("drop-db")) {
-    const c = await conn();
-    try { await c.query(`DROP DATABASE IF EXISTS \`${existing.db}\``); } finally { await c.end(); }
-    console.log(`\n  ${username} removed and ${existing.db} dropped.\n`);
+  if (dropping) {
+    for (const realm of REALMS) {
+      const c = await conn(realm);
+      try { await c.query(`DROP DATABASE IF EXISTS \`${dbFor(realm, existing.slug)}\``); }
+      finally { await c.end(); }
+    }
+    console.log(`\n  ${username} removed, ${theirs.join(" and ")} dropped.\n`);
   } else {
-    console.log(`\n  ${username} removed. ${existing.db} is left in place — drop it by hand if you want it gone.\n`);
+    console.log(`\n  ${username} removed. ${theirs.join(" and ")} are left in place —`);
+    console.log("  drop them by hand, or re-run with --drop-db, if you want them gone.\n");
   }
   return done();
 }
@@ -152,26 +172,59 @@ async function adoptAdmin() {
   if (!password) throw new Error("AUTH_PASSWORD is not set in .env.");
   if (password.length < 8) throw new Error("That password is under 8 characters; set a longer one first.");
 
-  await upsertUser({ username, password, db: BASE_DB, admin: true });
-  console.log(`\n  ${username} registered as admin, working in ${BASE_DB} — the book as it already is.`);
-  console.log("  Nothing moved: this only writes down what the .env login already meant.\n");
+  await upsertUser({ username, password, admin: true });
+  console.log(`\n  ${username} registered as admin, working in ${REALMS.map(baseOf).join(" and ")}`);
+  console.log("  — the databases as they already are. Nothing moved: this only writes");
+  console.log("  down what the .env login already meant.\n");
   return done();
 }
 
-/* ── the database behind a user ─────────────────────── */
+/** What exists and what does not, without changing anything. */
+async function check() {
+  const { listUsers } = await lib().catch(() => ({ listUsers: null }));
+  console.log("");
+  for (const realm of REALMS) {
+    const c = await conn(realm).catch(() => null);
+    if (!c) { console.log(`  ${realm.label.padEnd(14)} cannot connect`); continue; }
+    try {
+      const [rows] = await c.query("SHOW DATABASES");
+      const key = Object.keys(rows[0] || {})[0];
+      const have = new Set(rows.map((r) => r[key]));
+      const base = baseOf(realm);
+      console.log(`  ${realm.label.padEnd(14)} ${base}${have.has(base) ? "" : "   MISSING"}`);
+      // The control database shares the bot database's prefix, so it would
+      // otherwise be listed as somebody's book.
+      const mine = (n) => n.startsWith(base + "_") && n !== AUTH_DB && !n.startsWith(AUTH_DB + "_");
+      for (const n of [...have].filter(mine).sort()) {
+        console.log(`  ${"".padEnd(14)} ${n}`);
+      }
+    } finally { await c.end(); }
+  }
+  if (listUsers) {
+    const rows = await listUsers().catch(() => []);
+    console.log(`\n  registered users: ${rows.length ? rows.map((r) => r.username).join(", ") : "none (.env login active)"}`);
+  }
+  console.log("");
+  return done();
+}
+
+/* ── the databases behind a user ────────────────────── */
 
 /**
- * An empty copy of the admin's schema.
+ * An empty copy of a realm's schema.
  *
  * CREATE TABLE ... LIKE, table by table, so the structure matches exactly
- * what the app has migrated itself to and not one row comes across. Existing
- * tables are left alone, so running this twice is safe and so is running it
- * after a new table has appeared.
+ * what the app has migrated itself to and not one row comes across.
+ * Existing tables are left alone, so running this twice is safe and so is
+ * running it after a new table has appeared.
  */
-async function provision(db) {
+async function provision(realm, slug) {
+  const db = dbFor(realm, slug);
+  const base = baseOf(realm);
+  if (db === base) return;                       // the admin already has it
   if (!/^[A-Za-z0-9_]{1,64}$/.test(db)) throw new Error(`Not a usable database name: ${db}`);
 
-  const root = await conn();
+  const root = await conn(realm);
   try {
     await root.query(`CREATE DATABASE IF NOT EXISTS \`${db}\`
                       CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
@@ -186,12 +239,12 @@ async function provision(db) {
     await root.end();
   }
 
-  const src = await conn(BASE_DB);
-  const dst = await conn(db);
+  const src = await conn(realm, base);
+  const dst = await conn(realm, db);
   try {
     const [tables] = await src.query(
       `SELECT TABLE_NAME AS t FROM information_schema.TABLES
-        WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'`, [BASE_DB]);
+        WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'`, [base]);
     const [have] = await dst.query(
       `SELECT TABLE_NAME AS t FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?`, [db]);
     const already = new Set(have.map((r) => r.t));
@@ -199,7 +252,7 @@ async function provision(db) {
     let made = 0;
     for (const { t } of tables) {
       if (already.has(t)) continue;
-      await dst.query(`CREATE TABLE \`${db}\`.\`${t}\` LIKE \`${BASE_DB}\`.\`${t}\``);
+      await dst.query(`CREATE TABLE \`${db}\`.\`${t}\` LIKE \`${base}\`.\`${t}\``);
       made++;
     }
     console.log(`  ${db}: ${made} table${made === 1 ? "" : "s"} created`
@@ -232,9 +285,6 @@ function ask(question) {
 
 /**
  * A password typed without being echoed, asked twice.
- *
- * Not perfect concealment -- a terminal that does not support it still shows
- * nothing useful, because the characters are simply not written back.
  */
 function askPassword(prompt) {
   return new Promise((resolve, reject) => {

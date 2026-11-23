@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { readSession, safeDbName } from "./lib/session";
+import { readSession } from "./lib/session";
 
 /**
  * Who is asking, and which book they are allowed to see.
@@ -22,7 +22,7 @@ export async function middleware(request) {
 
   const headers = new Headers(request.headers);
   headers.delete("x-dash-user");
-  headers.delete("x-dash-db");
+  headers.delete("x-dash-slug");
   headers.delete("x-dash-admin");
 
   // Signing in, and signing out, cannot require being signed in.
@@ -52,10 +52,11 @@ export async function middleware(request) {
   }
 
   headers.set("x-dash-user", session.user);
-  // Empty rather than absent for a session with no database recorded: the
-  // pool falls back to the default, which is the admin's book, and only an
-  // admin session is ever issued without one.
-  headers.set("x-dash-db", safeDbName(session.db) || "");
+  // The user, not a database. Both databases derive their own name from it
+  // -- see lib/db-pools.js. The admin's is the empty string, which is a
+  // value and not an absence: it means the base databases, under the names
+  // they already had.
+  headers.set("x-dash-slug", session.slug);
   headers.set("x-dash-admin", session.admin ? "1" : "0");
 
   return NextResponse.next({ request: { headers } });
