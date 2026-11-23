@@ -176,8 +176,12 @@ async function provision(db) {
     await root.query(`CREATE DATABASE IF NOT EXISTS \`${db}\`
                       CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
   } catch (e) {
-    throw new Error(`Could not create ${db}: ${e.message}\n`
-      + `  The MySQL user needs CREATE rights. Check OPTIONS_MYSQL_USER in .env.`);
+    // The same advice the library gives, so the two cannot drift into saying
+    // different things about the same missing grant.
+    const { grantAdvice } = await lib();
+    throw new Error(/access denied/i.test(e.message)
+      ? grantAdvice(e.message)
+      : `Could not create ${db}: ${e.message}`);
   } finally {
     await root.end();
   }
