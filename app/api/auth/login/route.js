@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { authenticate, touchLogin } from "../../../../lib/users";
+import { signSession } from "../../../../lib/session";
 
 // ── Login throttling ──────────────────────────────────────────────────────
 // The dashboard is internet-facing and places live orders, so an unlimited
@@ -60,10 +62,8 @@ export async function POST(request) {
 
   const { username, password } = body;
 
-  if (
-    username !== process.env.AUTH_USERNAME ||
-    password !== process.env.AUTH_PASSWORD
-  ) {
+  const account = await authenticate(username, password);
+  if (!account) {
     // Start a fresh window if the previous one has aged out, so occasional
     // typos months apart never accumulate into a lockout.
     const a = (rec && now - rec.windowStart < WINDOW_MS)
@@ -85,9 +85,18 @@ export async function POST(request) {
   }
 
   attempts.delete(ip); // clean slate on success
+  touchLogin(account.user);
 
-  const res = NextResponse.json({ ok: true });
-  res.cookies.set("session_token", process.env.AUTH_SECRET, {
+  if (!process.env.AUTH_SECRET) {
+    return NextResponse.json(
+      { error: "The server has no AUTH_SECRET set, so no session can be signed." },
+      { status: 500 });
+  }
+
+  const res = NextResponse.json({ ok: true, user: account.user, admin: account.admin });
+  // The cookie now NAMES its user and is signed, rather than being one shared
+  // constant meaning "someone signed in". See lib/session.js.
+  res.cookies.set("session_token", await signSession(account, process.env.AUTH_SECRET), {
     httpOnly: true,
     sameSite: "strict",
     // Served over HTTPS in production; browsers still accept Secure cookies

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import Logo from "./Logo";
 import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import ThemeToggle from "./ThemeToggle";
 
 const nav = [
@@ -31,6 +32,19 @@ const optionsNav = [
 export default function Sidebar({ onNavigate }) {
   const pathname = usePathname();
   const router   = useRouter();
+
+  // Whose book is on screen. With more than one login this is not decoration:
+  // the pages look identical whichever user is signed in, and an empty
+  // dashboard reads as a broken dashboard unless it says whose it is.
+  const [me, setMe] = useState(null);
+  useEffect(() => {
+    let live = true;
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => { if (live) setMe(j?.user ? j : null); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -89,6 +103,21 @@ export default function Sidebar({ onNavigate }) {
       </nav>
 
       <div className="px-3 py-4 border-t border-white/10 space-y-2">
+        {me && (
+          <div className="flex items-center gap-2 px-3 pb-1">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/10 text-[11px] font-bold uppercase text-slate-200">
+              {String(me.user).slice(0, 1)}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-300" title={me.user}>
+              {me.user}
+            </span>
+            {me.admin && (
+              <span className="rounded bg-white/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-400">
+                admin
+              </span>
+            )}
+          </div>
+        )}
         <ThemeToggle />
         <button
           onClick={handleLogout}
