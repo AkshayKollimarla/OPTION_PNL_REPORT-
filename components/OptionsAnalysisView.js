@@ -434,27 +434,21 @@ export default function OptionsAnalysis({ view = "analysis" }) {
   const tradeExchange = (t) =>
     (t.account_id != null && accountExchangeById[t.account_id]) || exchangeOf(t.token);
 
-  // Capital behind a coin on an account, taken from the bot's entry log.
+  // The bot entry log's own investment figure is deliberately NOT read here
+  // any more.
   //
-  // The entry log's investment is the whole allocation for the coin — the grid
-  // bot and the options sitting on top of it are funded out of the same book —
-  // so it is the honest denominator for the options result. The options table
-  // carries its own per-strategy figure, which is kept only as a fallback for
-  // coins the bot never traded (BE, INTC, NBIS and the rest of the US names).
+  // It was the coin's standing allocation -- the whole book for that coin,
+  // grid bot and options funded together -- and it took precedence over the
+  // options table's own numbers. That made it answer a different question
+  // than the column it appeared in: PLTR showed six strategies each
+  // recording nothing and $17,700 underneath them, from an allocation last
+  // touched months before any of those options existed. The Investment
+  // column is now the options' own figure throughout, so every number in it
+  // can be checked against the strategies that unfold out of it.
   //
-  // See findBotRow above for how the two naming schemes are matched.
-  const botInvestmentOf = useMemo(() => {
-    const rows = (botMeta.investments || []).map((r) => ({
-      account: String(r.account || "").toUpperCase(),
-      base: canonToken(String(r.token_symbol || "").split("_").join("-")),
-      investment: Number(r.investment),
-    })).filter((r) => Number.isFinite(r.investment) && r.investment > 0);
-
-    return (base, account) => {
-      const hit = findBotRow(rows, base, account);
-      return hit ? hit.investment : null;
-    };
-  }, [botMeta.investments]);
+  // The bot's PNL is still read, just below — that is a measurement over the
+  // same window, not a standing fact, and the two were only ever confused
+  // because they sat in neighbouring columns.
 
   // What the grid bot made on this coin, over the SAME window and filters as
   // the report. Unlike the investment — a standing allocation read from the
@@ -1325,14 +1319,17 @@ export default function OptionsAnalysis({ view = "analysis" }) {
                 if (legEntry && (!st.entry || legEntry < st.entry)) st.entry = legEntry;
                 if (isNewStrategy) {
                   b.strategies += 1;
-                  // Capital behind the strategy. Every leg of a group carries
-                  // the same figure, so it is taken once per strategy — adding
-                  // it per leg would inflate a 4-leg structure fourfold.
-                  const inv = Number(t.investment);
-                  if (Number.isFinite(inv) && inv > 0) {
-                    b.invSum += inv;
-                    b.invCount += 1;
-                  }
+                  // The capital behind each strategy is gathered from
+                  // st.investment once every leg has been seen — see below.
+                  // It used to be sampled HERE, from whichever leg happened
+                  // to be the first of its group, on the reasoning that every
+                  // leg carries the same figure. Every leg that HAS one does;
+                  // not every leg has one. A four-legged BE structure records
+                  // 14,500 on its middle two legs and nothing on the outer
+                  // two, so the first leg read null and the coin's investment
+                  // silently lost it -- while the per-strategy column, which
+                  // takes the first leg that has a value, showed it. The two
+                  // disagreed about the same structure.
                   // How long the strategy was live. An open one is still
                   // running, so it counts up to today rather than stopping at
                   // whatever its last recorded date happens to be.
@@ -1355,11 +1352,37 @@ export default function OptionsAnalysis({ view = "analysis" }) {
                 // strategies rather than summed: the same balance is redeployed
                 // trade after trade, so adding it up would report it many times
                 // over.
-                const fromBot = botInvestmentOf(b.token, b.account);
-                b.investment = fromBot != null
-                  ? fromBot
-                  : (b.invCount ? b.invSum / b.invCount : null);
-                b.investmentSource = fromBot != null ? "bot" : (b.invCount ? "options" : null);
+                // Gathered from the strategies themselves, so this and the
+                // column that unfolds beneath it are reading one number.
+                const recorded = [...b.byStrategy.values()]
+                  .map((st) => st.investment)
+                  .filter((v) => Number.isFinite(v) && v > 0);
+                b.invCount = recorded.length;
+                b.invSum = recorded.reduce((a, v) => a + v, 0);
+
+                // The average of the strategies, and nothing else.
+                //
+                // The bot entry log used to win here, as the coin's standing
+                // allocation -- the whole book for that coin, bot and options
+                // together. It is a real number and it was answering a
+                // different question than the one this column asks, which is
+                // what made PLTR unreadable: six strategies each recording
+                // nothing, and $17,700 underneath them from a grid-bot
+                // allocation last touched months before any of those options
+                // existed. Every figure in this column now comes from the
+                // strategies that unfold out of it, so it can be checked by
+                // looking.
+                //
+                // Averaged, not summed: the same balance is redeployed
+                // strategy after strategy, so adding it up would report the
+                // money as many times as it was used.
+                //
+                // A coin whose strategies record nothing has no average and
+                // shows a dash. Its APY goes with it, which is right -- there
+                // is no return to state on capital that was never entered.
+                b.investment = b.invCount ? b.invSum / b.invCount : null;
+
+                b.invRecorded = b.invCount;
                 b.apy = apyOf(b.pnl, b.investment, b.days);
 
                 // What the bot made on the same coin over the same window.
@@ -1490,13 +1513,25 @@ export default function OptionsAnalysis({ view = "analysis" }) {
                                 <td className="py-2.5 px-3 text-left text-sm text-slate-600">{b.account}</td>
                                 <td className="py-2.5 px-3 text-right text-sm text-slate-600">{b.strategies}</td>
                                 <td className="py-2.5 px-3 text-right text-sm text-slate-600">{b.days || "—"}</td>
+                                {/* Where this figure comes from, on the face of it.
+                                    It was only ever in a tooltip, and a tooltip
+                                    cannot be seen: a coin whose strategies all
+                                    record nothing showed a column of dashes under
+                                    a total, which reads as arithmetic that does
+                                    not add up rather than as a number from
+                                    somewhere else entirely. */}
                                 <td
                                   className="py-2.5 px-3 text-right text-sm text-slate-600"
-                                  title={b.investmentSource === "options"
-                                    ? "No bot entry for this coin — averaged from the options strategies"
-                                    : b.investmentSource === "bot" ? "From the bot entry log (bot + options)" : ""}
+                                  title={b.invRecorded
+                                    ? `Averaged across the ${b.invRecorded} strateg${b.invRecorded === 1 ? "y" : "ies"} that recorded one — not summed, since the same capital is redeployed`
+                                    : "None of this coin's strategies recorded an investment"}
                                 >
                                   {b.investment != null ? fmtCcy(b.investment) : "—"}
+                                  {b.invRecorded > 0 && (
+                                    <span className="mt-0.5 block text-[10px] font-normal text-slate-400">
+                                      avg of {b.invRecorded}
+                                    </span>
+                                  )}
                                 </td>
                                 <td className={`py-2.5 px-3 text-right text-sm font-bold ${b.pnl >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(b.pnl)}</td>
                                 <td
@@ -1570,22 +1605,24 @@ export default function OptionsAnalysis({ view = "analysis" }) {
                                           <td className="py-2 px-3 text-left text-slate-500" colSpan={3}>
                                             {b.strategies} strateg{b.strategies === 1 ? "y" : "ies"} &middot; click one to open it
                                           </td>
-                                          {/* The coin's own figure, NOT the column above added
-                                              up. The same balance is redeployed strategy after
-                                              strategy, so a sum would report the money as many
-                                              times as it was used -- and where the coin's
-                                              investment comes from the bot entry log it is a
-                                              different quantity altogether, the whole book for
-                                              the coin rather than these options. Showing the
-                                              row's own number keeps this line equal to the one
-                                              it folds out of, which is the point of it. */}
+                                          {/* The average of the column above, not its sum. The
+                                              same balance is redeployed strategy after strategy,
+                                              so adding it up would report the money as many
+                                              times as it was used. Only the strategies that
+                                              recorded one are counted -- a dash is a figure
+                                              nobody entered, not a strategy that ran on
+                                              nothing, and averaging it in as zero would drag
+                                              the result toward zero for no reason. */}
                                           <td className="py-2 px-3 text-right tabular-nums text-slate-600"
-                                              title={b.investmentSource === "bot"
-                                                ? "The coin's allocation from the bot entry log — not these strategies added up"
-                                                : b.investmentSource === "options"
-                                                  ? "Averaged across these strategies, not summed: the same capital is redeployed"
-                                                  : "No investment recorded for this coin"}>
+                                              title={b.invRecorded
+                                                ? `Averaged across the ${b.invRecorded} strateg${b.invRecorded === 1 ? "y" : "ies"} above that recorded one — not summed, since the same capital is redeployed`
+                                                : "None of these strategies recorded an investment"}>
                                             {b.investment != null ? fmtCcy(b.investment) : "—"}
+                                            {b.invRecorded > 0 && (
+                                              <span className="mt-0.5 block text-[10px] font-normal text-slate-400">
+                                                avg of {b.invRecorded} above
+                                              </span>
+                                            )}
                                           </td>
                                           <td className="py-2 px-3 text-right text-slate-600">
                                             {fmtCcy([...b.byStrategy.values()].reduce((a, x) => a + x.fut, 0))}
