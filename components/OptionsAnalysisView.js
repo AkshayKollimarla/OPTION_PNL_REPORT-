@@ -1516,7 +1516,7 @@ export default function OptionsAnalysis({ view = "analysis" }) {
                                     <table className="w-full text-xs border-collapse">
                                       <thead>
                                         <tr className="border-b border-slate-200">
-                                          {["Strategy", "Legs", "Status", "Futures PNL", "Options PNL", "Net Booked"].map((h) => (
+                                          {["Strategy", "Legs", "Status", "Investment", "Futures PNL", "Options PNL", "Net Booked"].map((h) => (
                                             <th key={h} className={`py-1.5 px-3 text-[10px] font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap ${h === "Strategy" ? "text-left" : h === "Legs" || h === "Status" ? "text-center" : "text-right"}`}>{h}</th>
                                           ))}
                                         </tr>
@@ -1544,6 +1544,21 @@ export default function OptionsAnalysis({ view = "analysis" }) {
                                                 {st.open ? "open" : "closed"}
                                               </span>
                                             </td>
+                                            {/* The capital behind this one strategy, as it was
+                                                recorded on its legs. Every leg that carries the
+                                                figure carries the same one -- checked across the
+                                                book: 41 multi-leg structures record it, none
+                                                records two different values -- so it is read
+                                                once rather than added up, which on a four-legged
+                                                structure would report four times the money.
+                                                A dash where nothing was entered, never a zero:
+                                                $0.00 reads as "no capital behind it". */}
+                                            <td className="py-2 px-3 text-right tabular-nums text-slate-600"
+                                                title={st.investment != null
+                                                  ? "Recorded on this strategy's legs"
+                                                  : "No investment recorded on this strategy"}>
+                                              {st.investment != null ? fmtCcy(st.investment) : "—"}
+                                            </td>
                                             <td className={`py-2 px-3 text-right font-semibold ${st.fut >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(st.fut)}</td>
                                             <td className={`py-2 px-3 text-right font-semibold ${st.opt >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(st.opt)}</td>
                                             <td className={`py-2 px-3 text-right font-bold ${st.net >= 0 ? "text-emerald-600" : "text-red-500"}`}>{fmtCcy(st.net)}</td>
@@ -1554,6 +1569,23 @@ export default function OptionsAnalysis({ view = "analysis" }) {
                                         <tr className="border-t border-slate-200 font-semibold">
                                           <td className="py-2 px-3 text-left text-slate-500" colSpan={3}>
                                             {b.strategies} strateg{b.strategies === 1 ? "y" : "ies"} &middot; click one to open it
+                                          </td>
+                                          {/* The coin's own figure, NOT the column above added
+                                              up. The same balance is redeployed strategy after
+                                              strategy, so a sum would report the money as many
+                                              times as it was used -- and where the coin's
+                                              investment comes from the bot entry log it is a
+                                              different quantity altogether, the whole book for
+                                              the coin rather than these options. Showing the
+                                              row's own number keeps this line equal to the one
+                                              it folds out of, which is the point of it. */}
+                                          <td className="py-2 px-3 text-right tabular-nums text-slate-600"
+                                              title={b.investmentSource === "bot"
+                                                ? "The coin's allocation from the bot entry log — not these strategies added up"
+                                                : b.investmentSource === "options"
+                                                  ? "Averaged across these strategies, not summed: the same capital is redeployed"
+                                                  : "No investment recorded for this coin"}>
+                                            {b.investment != null ? fmtCcy(b.investment) : "—"}
                                           </td>
                                           <td className="py-2 px-3 text-right text-slate-600">
                                             {fmtCcy([...b.byStrategy.values()].reduce((a, x) => a + x.fut, 0))}
