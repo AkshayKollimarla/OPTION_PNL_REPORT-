@@ -76,10 +76,17 @@ body {
 .dark .bg-white { background-color: var(--surface); }
 .dark .hover\:bg-white:hover { background-color: var(--surface-3); }
 
+/* Every opacity this app actually uses has to be listed. A tint that is not
+   here is not remapped at all: it stays slate-50 over a near-black page, so
+   the panel keeps its light wash while the text on it stays light too, and
+   the whole block greys out into something barely readable.
+   bg-slate-50/70 was the one left off -- the expanded strategy rows under
+   Options Summary -- while bg-slate-100/70 below was remembered. */
 .dark .bg-slate-50,
 .dark .bg-slate-50\/40,
 .dark .bg-slate-50\/50,
 .dark .bg-slate-50\/60,
+.dark .bg-slate-50\/70,
 .dark .bg-slate-50\/80 { background-color: var(--surface-2); }
 
 .dark .hover\:bg-slate-50:hover,
